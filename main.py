@@ -7,7 +7,6 @@ Runs the signal bot: discovers tokens, scores them, sends alerts.
 import time
 import traceback
 from datetime import datetime
-
 # Config and database
 from config import (
     SCAN_INTERVALS, DISCOVERY_SETTINGS, DEBUG_MODE,
@@ -100,17 +99,17 @@ def check_x_alert(token_address, symbol, name, mc_now):
             x_alerts_sent[token_address].add(milestone)
             log(f"🚀 {symbol} hit {milestone}x! MC: ${mc_now:,.0f}")
             alert_time = last_alert.get("created_at", 0)
-minutes_elapsed = (time.time() - alert_time) / 60 if alert_time else 0
+            minutes_elapsed = (time.time() - alert_time) / 60 if alert_time else 0
 
-send_x_alert(
-    symbol=symbol,
-    name=name,
-    addr=token_address,
-    multiplier=milestone,
-    mc_now=mc_now,
-    mc_at_alert=mc_at_alert,
-    minutes_elapsed=minutes_elapsed
-)
+            send_x_alert(
+                symbol=symbol,
+                name=name,
+                addr=token_address,
+                multiplier=milestone,
+                mc_now=mc_now,
+                mc_at_alert=mc_at_alert,
+                minutes_elapsed=minutes_elapsed
+            )
 
 
 def discover_new_tokens():
@@ -375,4 +374,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()￼Enter
