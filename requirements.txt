@@ -1,8 +1,13 @@
 requests
 aiohttp
 websockets
-python-telegram-bot
+python-telegram-bot==20.7
 pandas
 flask
 solana
 solders
+httpx
+asyncio
+sqlalchemy
+aiosqlite
+pytz
