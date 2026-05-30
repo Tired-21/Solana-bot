@@ -1,0 +1,8 @@
+requests
+aiohttp
+websockets
+python-telegram-bot
+pandas
+flask
+solana
+solders
