@@ -48,13 +48,13 @@ RATE_LIMITS = {
 # DISCOVERY SETTINGS
 # ============================================================
 DISCOVERY_SETTINGS = {
-    "min_liquidity_usd": 500,
-    "min_volume_5m_usd": 100,
-    "min_holders": 5,
-    "min_token_age_minutes": 1,
-    "max_token_age_minutes": 30,
-    "max_market_cap_usd": 2000000,
-    "max_liquidity_usd": 500000,
+    "min_liquidity_usd": 1000,
+    "min_volume_5m_usd": 500,
+    "min_holders": 10,
+    "min_token_age_minutes": 3,
+    "max_token_age_minutes": 10,
+    "max_market_cap_usd": 500000,
+    "max_liquidity_usd": 100000,
     "track_graduated_only": False,
     "track_bonding_curve": True,
 }
@@ -65,7 +65,7 @@ DISCOVERY_SETTINGS = {
 ALERT_THRESHOLDS = {
     "tier1_high": 80,
     "tier2_medium": 65,
-    "tier3_low": 30,
+    "tier3_low": 35,
     "alert_cooldown_minutes": 30,
     "score_change_for_realert": 10,
 }
@@ -99,7 +99,7 @@ TIMING_GRADES = {
     "B": {"max_age": 15,     "label": "Early",      "multiplier": 1.1},
     "C": {"max_age": 30,     "label": "Mid",        "multiplier": 1.0},
     "D": {"max_age": 60,     "label": "Late",       "multiplier": 0.8},
-    "F": {"max_age": 999999, "label": "Very Late",  "multiplier": 0.5},
+    "F": {"max_age": 999999, "label": "Very Late",  "multiplier": 0.8},
     "holders_early": 50,
     "holders_mid": 200,
     "holders_late": 500,
