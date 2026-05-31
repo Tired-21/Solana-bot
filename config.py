@@ -1,7 +1,6 @@
 """
 config.py - Configuration (values injected via environment variables)
 """
-
 import os
 
 # ============================================================
@@ -10,7 +9,6 @@ import os
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
-
 TELEGRAM_SETTINGS = {
     "parse_mode": "HTML",
     "disable_preview": True,
@@ -27,8 +25,8 @@ GOPLUS_API_KEY = os.getenv("GOPLUS_API_KEY", "")
 # ============================================================
 # API ENDPOINTS
 # ============================================================
-HELIUS_RPC = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
-HELIUS_API = f"https://api.helius.xyz/v0"
+HELIUS_RPC = "https://mainnet.helius-rpc.com/?api-key=" + HELIUS_API_KEY
+HELIUS_API = "https://api.helius.xyz/v0"
 DEXSCREENER_API = "https://api.dexscreener.com/latest"
 BIRDEYE_API = "https://public-api.birdeye.so"
 GOPLUS_API = "https://api.gopluslabs.io/api/v1"
@@ -44,17 +42,18 @@ RATE_LIMITS = {
     "birdeye": 5,
     "goplus": 10,
 }
+
 # ============================================================
-# DISCOVERY SETTINGS
+# DISCOVERY SETTINGS — LOOSENED FOR ALERT FLOW
 # ============================================================
 DISCOVERY_SETTINGS = {
-    "min_liquidity_usd": 1000,
-    "min_volume_5m_usd": 500,
-    "min_holders": 10,
-    "min_token_age_minutes": 3,
-    "max_token_age_minutes": 10,
-    "max_market_cap_usd": 500000,
-    "max_liquidity_usd": 100000,
+    "min_liquidity_usd": 500,
+    "min_volume_5m_usd": 100,
+    "min_holders": 5,
+    "min_token_age_minutes": 1,
+    "max_token_age_minutes": 30,
+    "max_market_cap_usd": 2000000,
+    "max_liquidity_usd": 500000,
     "track_graduated_only": False,
     "track_bonding_curve": True,
 }
@@ -65,7 +64,7 @@ DISCOVERY_SETTINGS = {
 ALERT_THRESHOLDS = {
     "tier1_high": 80,
     "tier2_medium": 65,
-    "tier3_low": 35,
+    "tier3_low": 30,
     "alert_cooldown_minutes": 30,
     "score_change_for_realert": 10,
 }
@@ -128,7 +127,9 @@ HARD_REJECTS = {
     "mint_authority": False,
     "freeze_authority": False,
     "honeypot": True,
+    "top_holder_above": 0.5,
 }
+
 # ============================================================
 # STRUCTURAL THRESHOLDS
 # ============================================================
@@ -139,7 +140,12 @@ STRUCTURAL_THRESHOLDS = {
     "max_dev_hold_pct": 20,
     "lp_burned_bonus": 15,
     "verified_bonus": 10,
+    "top_holder_danger": 0.20,
+    "top_holder_warning": 0.10,
+    "top10_holder_danger": 0.60,
+    "top10_holder_warning": 0.40,
 }
+
 # ============================================================
 # LINK TEMPLATES
 # ============================================================
@@ -157,6 +163,7 @@ SMART_WALLET_SETTINGS = {
     "score_boost_per_appearance": 10,
     "max_boost": 30,
 }
+
 # ============================================================
 # CONTEXT SETTINGS
 # ============================================================
@@ -175,7 +182,6 @@ CONTEXT_SETTINGS = {
 def validate_config():
     errors = []
     warnings = []
-
     if not TELEGRAM_BOT_TOKEN:
         errors.append("❌ TELEGRAM_BOT_TOKEN not set")
     if not TELEGRAM_CHAT_ID:
@@ -184,31 +190,27 @@ def validate_config():
         warnings.append("⚠️ HELIUS_API_KEY not set - some features disabled")
     if not BIRDEYE_API_KEY:
         warnings.append("⚠️ BIRDEYE_API_KEY not set - holder data unavailable")
-
     for w in warnings:
         print(w)
-
     return errors
-
 
 def print_config_summary():
     tier1 = ALERT_THRESHOLDS['tier1_high']
     tier2 = ALERT_THRESHOLDS['tier2_medium']
     tier3 = ALERT_THRESHOLDS['tier3_low']
-
     print("=" * 60)
     print("📋 BOT CONFIGURATION SUMMARY")
     print("=" * 60)
-    print(f"Telegram Enabled: {TELEGRAM_ENABLED}")
-    print(f"Debug Mode: {DEBUG_MODE}")
-    print(f"\nDiscovery Settings:")
-    print(f"  Min Liquidity: ${DISCOVERY_SETTINGS['min_liquidity_usd']:,}")
-    print(f"  Max Token Age: {DISCOVERY_SETTINGS['max_token_age_minutes']} minutes")
-    print(f"\nAlert Thresholds:")
-    print(f"  🔥 Tier 1 (High): {tier1}+")
-    print(f"  ⚠️ Tier 2 (Medium): {tier2}+")
-    print(f"  📊 Tier 3 (Low): {tier3}+")
-    print(f"\nEngine Weights:")
+    print("Telegram Enabled: " + str(TELEGRAM_ENABLED))
+    print("Debug Mode: " + str(DEBUG_MODE))
+    print("\nDiscovery Settings:")
+    print("  Min Liquidity: $" + str(DISCOVERY_SETTINGS['min_liquidity_usd']))
+    print("  Max Token Age: " + str(DISCOVERY_SETTINGS['max_token_age_minutes']) + " minutes")
+    print("\nAlert Thresholds:")
+    print("  🔥 Tier 1 (High): " + str(tier1) + "+")
+    print("  ⚠️ Tier 2 (Medium): " + str(tier2) + "+")
+    print("  📊 Tier 3 (Low): " + str(tier3) + "+")
+    print("\nEngine Weights:")
     for engine, weight in ENGINE_WEIGHTS.items():
-        print(f"  {engine}: {weight*100:.0f}%")
+        print("  " + engine + ": " + str(int(weight*100)) + "%")
     print("=" * 60)
