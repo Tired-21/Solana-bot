@@ -1,4 +1,3 @@
-
 """
 main.py - Main Entry Point
 Runs the signal bot: discovers tokens, scores them, sends alerts.
