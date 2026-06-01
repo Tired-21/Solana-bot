@@ -202,4 +202,4 @@ def send_startup_message():
         "Send /help for commands."
     )
     return send_message(msg)
-￼Enter
+Enter
