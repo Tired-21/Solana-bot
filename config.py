@@ -174,6 +174,9 @@ CONTEXT_SETTINGS = {
     "trend_weight": 0.7,
     "sol_bullish_threshold": 3.0,
     "sol_bearish_threshold": -3.0,
+    "bullish_multiplier": 1.2,
+    "neutral_multiplier": 1.0,
+    "bearish_multiplier": 0.8,
 }
 
 # ============================================================
