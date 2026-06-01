@@ -304,9 +304,13 @@ def run_scan_cycle():
 
     active_tokens = db.get_active_tokens()
     bot_state["tokens_tracked"] = len(active_tokens)
+    # Skip tokens just processed as new to avoid double alerts
+    new_addresses = {t["address"] for t in new_tokens} if new_tokens else set()
     if active_tokens:
         log(f"📡 Updating {len(active_tokens)} tracked tokens...")
         for token in active_tokens:
+            if token["address"] in new_addresses:
+                continue
             try:
                 alert_data = process_token(token["address"])
                 if alert_data:
