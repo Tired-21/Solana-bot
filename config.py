@@ -48,7 +48,12 @@ RATE_LIMITS = {
 # ============================================================
 DISCOVERY_SETTINGS = {
     "min_liquidity_usd": 500,
-    "min_volume_5m_usd": 100,
+    "min_volume_5m_usd": 1000,
+    # was 100 — raised toward Ola's volume buckets (<$10k = 9.1% win rate,
+    # $10k-15k = 57.1%). $1000 removes the absolute bottom-feeder noise
+    # (e.g. Chaton at $4.5K/5m, 1:1 buy/sell) without blocking tokens that
+    # are still 1-2 minutes old and building volume. Watch results before
+    # pushing this closer to $10k.
     "min_holders": 5,
     "min_token_age_minutes": 1,
     "max_token_age_minutes": 30,
@@ -112,12 +117,22 @@ DISCOVERY_THRESHOLDS = {
     "volume_acceleration_moderate": 1.5,
     "holder_growth_fast": 5,
     "holder_growth_moderate": 2,
-    "buy_pressure_strong": 2.0,
-    "buy_pressure_moderate": 1.3,
+    "buy_pressure_strong": 5.0,
+    # was 2.0 — the 14 confirmed winners had a median buy/sell ratio of
+    # ~90:1 over their first 3h. A 2:1 "strong" bar was trivially easy
+    # to clear (Chaton, a 1:1 wash-traded token, still scored 5pts here).
+    # 5:1 requires real buy dominance without demanding the full 3h
+    # magnitude in a 5m snapshot.
+    "buy_pressure_moderate": 2.0,
+    # was 1.3 — what used to count as "strong" (2:1) now sits at "moderate".
     "price_momentum_strong": 0.20,
     "price_momentum_moderate": 0.10,
-    "tx_frequency_high": 10,
-    "tx_frequency_moderate": 5,
+    "tx_frequency_high": 30,
+    # was 10 — Chaton hit 126 txns/5m (63 buys + 63 sells) and cleared
+    # "high" trivially while being a wash-trading token. Raising this
+    # makes "high activity" mean something again.
+    "tx_frequency_moderate": 12,
+    # was 5
 }
 
 # ============================================================
