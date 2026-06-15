@@ -118,19 +118,29 @@ def start_command_listener():
     t.start()
 
 
-def get_age_label(created_at):
-    if not created_at:
-        return "Unknown", "⚪"
-    ts = created_at / 1000 if created_at > 1e10 else created_at
-    mins = (time.time() - ts) / 60
-    if mins < 0 or mins > 10000:
-        return "Unknown", "⚪"
-    if mins < 5:
-        return str(int(mins)) + "m", "🟢"
-    elif mins < 15:
-        return str(int(mins)) + "m", "🟡"
+def get_age_label_from_minutes(age_minutes):
+    """
+    Converts age_minutes (already computed by timing.py, with fallbacks
+    built in — never None) into a display label + emoji.
+    """
+    mins = age_minutes if age_minutes is not None else 15
+
+    if mins < 0:
+        mins = 0
+
+    if mins < 60:
+        age_str = str(int(mins)) + "m"
+    elif mins < 1440:
+        age_str = str(round(mins / 60, 1)) + "h"
     else:
-        return str(int(mins)) + "m", "🔴"
+        age_str = str(round(mins / 1440, 1)) + "d"
+
+    if mins < 5:
+        return age_str, "🟢"
+    elif mins < 15:
+        return age_str, "🟡"
+    else:
+        return age_str, "🔴"
 
 
 def format_alert(alert_data):
@@ -143,9 +153,9 @@ def format_alert(alert_data):
     buys = alert_data.get("buys_5m", 0)
     sells = alert_data.get("sells_5m", 0)
     price = alert_data.get("price_usd", 0)
-    created_at = alert_data.get("created_at") or alert_data.get("pair_created_at")
+    age_minutes = alert_data.get("age_minutes")
 
-    age_str, age_emoji = get_age_label(created_at)
+    age_str, age_emoji = get_age_label_from_minutes(age_minutes)
     dex_link = "https://dexscreener.com/solana/" + addr
     birdeye_link = "https://birdeye.so/token/" + addr + "?chain=solana"
 

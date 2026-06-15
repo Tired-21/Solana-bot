@@ -118,6 +118,8 @@ def generate_alert_data(token_address, token_data, current_data,
         "market_cap_usd": current_data.get("market_cap_usd", 0),
         "liquidity_usd": current_data.get("liquidity_usd", 0),
         "volume_5m": current_data.get("volume_5m", 0),
+        "buys_5m": current_data.get("buys_5m", 0),
+        "sells_5m": current_data.get("sells_5m", 0),
         "holders": current_data.get("holders", 0),
         
         # Engine scores
