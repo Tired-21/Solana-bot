@@ -4,6 +4,7 @@ database.py - SQLite Database Operations
 Handles all data storage for the bot.
 """
 
+import os
 import sqlite3
 import time
 from datetime import datetime
@@ -12,6 +13,9 @@ from config import DATABASE_FILE, DEBUG_MODE
 
 def get_connection():
     """Returns a database connection."""
+    db_dir = os.path.dirname(DATABASE_FILE)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row  # Access columns by name
     return conn
@@ -353,6 +357,57 @@ def get_last_alert(token_address):
     row = c.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def get_peak_market_cap(token_address, since_timestamp=None):
+    """
+    Returns the highest market_cap_usd ever recorded in snapshots
+    for this token, optionally only counting snapshots after a given time.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+
+    if since_timestamp:
+        c.execute('''
+            SELECT MAX(market_cap_usd) as peak FROM snapshots
+            WHERE token_address = ? AND timestamp >= ?
+        ''', (token_address, since_timestamp))
+    else:
+        c.execute('''
+            SELECT MAX(market_cap_usd) as peak FROM snapshots
+            WHERE token_address = ?
+        ''', (token_address,))
+
+    row = c.fetchone()
+    conn.close()
+    return row["peak"] if row and row["peak"] else 0
+
+
+def get_alerts_in_window(hours=24):
+    """
+    Returns one row per token that received its FIRST alert within the
+    given window (so a token alerted yesterday but still climbing today
+    doesn't get re-listed as a 'new' entry in tonight's digest).
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    cutoff = int(time.time()) - (hours * 3600)
+
+    c.execute('''
+        SELECT a.token_address, a.market_cap_at_alert, a.timestamp,
+               t.symbol, t.name
+        FROM alerts a
+        JOIN tokens t ON a.token_address = t.address
+        WHERE a.timestamp >= ?
+        AND a.id = (
+            SELECT MIN(id) FROM alerts a2 WHERE a2.token_address = a.token_address
+        )
+        ORDER BY a.timestamp ASC
+    ''', (cutoff,))
+
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def can_alert(token_address, cooldown_minutes):

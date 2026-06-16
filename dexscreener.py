@@ -3,6 +3,7 @@ dexscreener.py - DexScreener API
 """
 
 import requests
+import time
 from config import DEXSCREENER_API, DEBUG_MODE
 from rate_limiter import wait_for
 
@@ -63,13 +64,41 @@ def parse_pair_data(pair):
             "sells_1h": int(txns_1h.get("sells", 0) or 0),
             "pair_address": pair.get("pairAddress"),
             "dex_id": pair.get("dexId"),
-            "pair_created_at": pair.get("pairCreatedAt"),
+            "pair_created_at": _validate_created_at(pair.get("pairCreatedAt")),
             "url": pair.get("url"),
         }
     except Exception as e:
         if DEBUG_MODE:
             print(f"❌ Parse error: {e}")
         return None
+
+
+def _validate_created_at(raw_value):
+    """
+    DexScreener's pairCreatedAt is sometimes missing, zero, or points to
+    a pool re-index event rather than true launch time. This does a basic
+    sanity check and logs when something looks off, instead of silently
+    trusting whatever comes back.
+    """
+    if not raw_value:
+        if DEBUG_MODE:
+            print("⚠️  pairCreatedAt missing from DexScreener response")
+        return None
+
+    ts = raw_value / 1000 if raw_value > 1e12 else raw_value
+    now = time.time()
+
+    if ts > now:
+        if DEBUG_MODE:
+            print(f"⚠️  pairCreatedAt is in the future ({ts}), discarding")
+        return None
+
+    if ts < now - (365 * 24 * 3600):
+        if DEBUG_MODE:
+            print(f"⚠️  pairCreatedAt is over a year old ({ts}), suspicious for a pump.fun token")
+        return None
+
+    return raw_value
 
 
 def search_tokens(query):

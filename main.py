@@ -30,14 +30,14 @@ from smart_wallet import calculate_smart_wallet_score
 from alert import generate_alert_data
 
 # Telegram
-from telegram_bot import send_alert, send_startup_message, send_message, send_x_alert, start_command_listener, bot_state
+from telegram_bot import send_alert, send_startup_message, send_message, send_x_alert, send_daily_digest, start_command_listener, bot_state
 
 # Helpers
 from helpers import format_number, truncate_address
 
 # Track which X milestones have been sent per token
 # Format: {token_address: set of multipliers already alerted}
-x_alerts_sent = {}
+x_alerts_sent = {}  # token_address -> last alerted multiplier (e.g. 2, 4, 8, 16...)
 
 
 def log(message):
@@ -77,7 +77,7 @@ def passes_discovery_filter(token, source="unknown"):
 
 
 def check_x_alert(token_address, symbol, name, mc_now):
-    """Checks if token has hit 2x, 5x or 10x since first alert."""
+    """Checks if MC has doubled again since the last X-alert (continuous: 2x, 4x, 8x, 16x...)."""
     last_alert = db.get_last_alert(token_address)
     if not last_alert:
         return
@@ -88,27 +88,32 @@ def check_x_alert(token_address, symbol, name, mc_now):
 
     multiplier = mc_now / mc_at_alert
 
-    # Initialize tracking for this token
+    # Initialize tracking for this token — next target starts at 2x
     if token_address not in x_alerts_sent:
-        x_alerts_sent[token_address] = set()
+        x_alerts_sent[token_address] = 1  # last confirmed multiplier (1x = baseline)
 
-    # Check milestones in order
-    for milestone in [2, 5, 10]:
-        if multiplier >= milestone and milestone not in x_alerts_sent[token_address]:
-            x_alerts_sent[token_address].add(milestone)
-            log(f"🚀 {symbol} hit {milestone}x! MC: ${mc_now:,.0f}")
-            alert_time = last_alert.get("created_at", 0)
-            minutes_elapsed = (time.time() - alert_time) / 60 if alert_time else 0
+    last_milestone = x_alerts_sent[token_address]
+    next_target = last_milestone * 2
 
-            send_x_alert(
-                symbol=symbol,
-                name=name,
-                addr=token_address,
-                multiplier=milestone,
-                mc_now=mc_now,
-                mc_at_alert=mc_at_alert,
-                minutes_elapsed=minutes_elapsed
-            )
+    # Keep firing while the current multiplier has cleared the next doubling
+    while multiplier >= next_target:
+        x_alerts_sent[token_address] = next_target
+        log(f"🚀 {symbol} hit {next_target}x! MC: ${mc_now:,.0f}")
+        alert_time = last_alert.get("timestamp", 0)
+        minutes_elapsed = (time.time() - alert_time) / 60 if alert_time else 0
+
+        send_x_alert(
+            symbol=symbol,
+            name=name,
+            addr=token_address,
+            multiplier=next_target,
+            mc_now=mc_now,
+            mc_at_alert=mc_at_alert,
+            minutes_elapsed=minutes_elapsed
+        )
+
+        last_milestone = next_target
+        next_target = last_milestone * 2
 
 
 def discover_new_tokens():
@@ -319,6 +324,27 @@ def run_scan_cycle():
                     log(f"  ❌ Error updating {token.get('symbol', '?')}: {e}")
 
 
+def run_daily_digest():
+    """Builds and sends the 24h leaderboard digest."""
+    log("📊 Building daily digest...")
+    alerts = db.get_alerts_in_window(hours=24)
+
+    entries = []
+    for a in alerts:
+        peak_mc = db.get_peak_market_cap(a["token_address"], since_timestamp=a["timestamp"])
+        # Peak should never be lower than the alert-time MC itself
+        peak_mc = max(peak_mc, a.get("market_cap_at_alert", 0) or 0)
+        entries.append({
+            "symbol": a.get("symbol"),
+            "name": a.get("name"),
+            "market_cap_at_alert": a.get("market_cap_at_alert", 0),
+            "peak_market_cap": peak_mc,
+        })
+
+    send_daily_digest(entries)
+    log(f"📊 Daily digest sent ({len(entries)} tokens)")
+
+
 def main():
     """Main entry point."""
     print("\n" + "="*50)
@@ -352,6 +378,7 @@ def main():
     last_scan = 0
     last_context_update = 0
     last_cleanup = 0
+    last_digest = 0
     cycle_count = 0
 
     log("✅ Bot started! Monitoring for opportunities...\n")
@@ -392,6 +419,24 @@ def main():
                     if DEBUG_MODE:
                         log(f"❌ Cleanup error: {e}")
                 last_cleanup = now
+
+            if now - last_digest >= SCAN_INTERVALS["daily_digest"]:
+                try:
+                    run_daily_digest()
+                except Exception as e:
+                    log(f"❌ Daily digest error: {e}")
+                    if DEBUG_MODE:
+                        traceback.print_exc()
+                last_digest = now
+
+            if bot_state.get("digest_requested"):
+                bot_state["digest_requested"] = False
+                try:
+                    run_daily_digest()
+                except Exception as e:
+                    log(f"❌ Manual digest error: {e}")
+                    if DEBUG_MODE:
+                        traceback.print_exc()
 
             time.sleep(1)
 

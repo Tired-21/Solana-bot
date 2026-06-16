@@ -17,6 +17,7 @@ bot_state = {
     "last_scan": 0,
     "tokens_tracked": 0,
     "alerts_sent": 0,
+    "digest_requested": False,
 }
 
 _last_update_id = 0
@@ -81,12 +82,16 @@ def handle_command(command):
             "Last scan: " + last_str
         )
         send_message(msg)
+    elif command == "/digest":
+        bot_state["digest_requested"] = True
+        send_message("📊 Generating digest...")
     elif command == "/help":
         send_message(
             "<b>Commands</b>\n"
             "/start - resume scanning\n"
             "/stop - pause scanning\n"
             "/status - show bot status\n"
+            "/digest - show 24h leaderboard now\n"
             "/help - show this message"
         )
 
@@ -212,3 +217,44 @@ def send_startup_message():
         "Send /help for commands."
     )
     return send_message(msg)
+
+
+def send_daily_digest(entries):
+    """
+    entries: list of dicts, each with keys:
+        symbol, name, market_cap_at_alert, peak_market_cap
+    Sorted by multiplier descending before display.
+    """
+    if not entries:
+        msg = "📊 <b>Daily Digest (24h)</b>\nNo tokens alerted in the last 24 hours."
+        return send_message(msg)
+
+    scored = []
+    for e in entries:
+        alert_mc = e.get("market_cap_at_alert", 0) or 0
+        peak_mc = e.get("peak_market_cap", 0) or 0
+        multiplier = (peak_mc / alert_mc) if alert_mc > 0 else 0
+        scored.append({**e, "multiplier": multiplier})
+
+    scored.sort(key=lambda x: x["multiplier"], reverse=True)
+
+    lines = ["📊 <b>Daily Digest (24h)</b>", f"{len(scored)} token(s) alerted\n"]
+
+    for e in scored:
+        symbol = e.get("symbol") or "???"
+        alert_mc = e.get("market_cap_at_alert", 0) or 0
+        peak_mc = e.get("peak_market_cap", 0) or 0
+        mult = e["multiplier"]
+
+        alert_mc_str = format_number(alert_mc)
+        peak_mc_str = format_number(peak_mc)
+        mult_str = f"{mult:.1f}x" if mult > 0 else "—"
+
+        lines.append(
+            f"<b>{symbol}</b>\n"
+            f"  Alert MC: ${alert_mc_str} → Peak MC: ${peak_mc_str}\n"
+            f"  Max: {mult_str}"
+        )
+
+    msg = "\n\n".join(lines)
+    return send_message(msg, silent=False)
