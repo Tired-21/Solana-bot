@@ -378,7 +378,7 @@ def main():
     last_scan = 0
     last_context_update = 0
     last_cleanup = 0
-    last_digest = 0
+    last_digest = time.time()
     cycle_count = 0
 
     log("✅ Bot started! Monitoring for opportunities...\n")

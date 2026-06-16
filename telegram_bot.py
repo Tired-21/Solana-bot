@@ -238,7 +238,7 @@ def send_daily_digest(entries):
 
     scored.sort(key=lambda x: x["multiplier"], reverse=True)
 
-    lines = ["📊 <b>Daily Digest (24h)</b>", f"{len(scored)} token(s) alerted\n"]
+    lines = ["📊 <b>Daily Digest (24h)</b>", f"{len(scored)} token(s) alerted"]
 
     for e in scored:
         symbol = e.get("symbol") or "???"
@@ -250,11 +250,12 @@ def send_daily_digest(entries):
         peak_mc_str = format_number(peak_mc)
         mult_str = f"{mult:.1f}x" if mult > 0 else "—"
 
-        lines.append(
+        entry_block = (
             f"<b>{symbol}</b>\n"
-            f"  Alert MC: ${alert_mc_str} → Peak MC: ${peak_mc_str}\n"
+            f"  Alert MC: {alert_mc_str} -> Peak MC: {peak_mc_str}\n"
             f"  Max: {mult_str}"
         )
+        lines.append(entry_block)
 
     msg = "\n\n".join(lines)
     return send_message(msg, silent=False)
