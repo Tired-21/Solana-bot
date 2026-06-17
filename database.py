@@ -594,7 +594,12 @@ def cache_security_scan(token_address, is_honeypot, has_freeze, has_mint, top_ho
     """Caches security scan results."""
     conn = get_connection()
     c = conn.cursor()
-    
+
+    # Defensive: None means "unknown", treat as False rather than crashing.
+    is_honeypot = is_honeypot or False
+    has_freeze = has_freeze or False
+    has_mint = has_mint or False
+
     c.execute('''
         INSERT OR REPLACE INTO security_cache 
         (token_address, is_honeypot, has_freeze, has_mint, top_holder_pct, scanned_at)

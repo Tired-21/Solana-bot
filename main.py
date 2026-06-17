@@ -222,9 +222,9 @@ def process_token(token_address):
         security_data = get_token_security(token_address)
         db.cache_security_scan(
             token_address=token_address,
-            is_honeypot=security_data.get("is_honeypot", False) if security_data else False,
-            has_freeze=authority_data.get("has_freeze", False) if authority_data else False,
-            has_mint=authority_data.get("has_mint", False) if authority_data else False,
+            is_honeypot=(security_data.get("is_honeypot") if security_data else False) or False,
+            has_freeze=(authority_data.get("has_freeze") if authority_data else False) or False,
+            has_mint=(authority_data.get("has_mint") if authority_data else False) or False,
             top_holder_pct=0
         )
     holder_data = get_holder_distribution(token_address)

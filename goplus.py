@@ -31,16 +31,18 @@ def get_token_security(mint_address):
                 print(f"⚠️ GoPlus returned code: {data.get('code')}")
             return None
         
-        # Try both lowercase and original address
-        result = data.get("result", {}).get(mint_address.lower())
+        result_data = data.get("result") or {}
+        result = result_data.get(mint_address.lower())
         if not result:
-            result = data.get("result", {}).get(mint_address)
+            result = result_data.get(mint_address)
         
         if not result:
             if DEBUG_MODE:
                 print("⚠️ Token not in GoPlus database")
             return None
-        
+
+        lp_burn_data = _extract_lp_burn_status(result)
+
         return {
             "address": mint_address,
             "is_honeypot": str(result.get("is_honeypot", "0")) == "1",
@@ -51,12 +53,63 @@ def get_token_security(mint_address):
             "transfer_pausable": str(result.get("transfer_pausable", "0")) == "1",
             "holder_count": int(result.get("holder_count", 0) or 0),
             "creator_address": result.get("creator_address"),
+            "lp_burned": lp_burn_data["lp_burned"],
+            "lp_burned_pct": lp_burn_data["lp_burned_pct"],
         }
         
     except Exception as e:
         if DEBUG_MODE:
             print(f"❌ GoPlus error: {e}")
         return None
+
+
+def _extract_lp_burn_status(result):
+    """
+    Looks for LP lock/burn info in GoPlus's response. Field names aren't
+    fully confirmed from public docs for the Solana endpoint at time of
+    writing, so this checks several plausible key names and logs the
+    raw lp-related keys if none match — that log output is what should
+    be used to correct this function once real data is seen, instead of
+    this silently doing nothing the way the old smart_wallet hookup did.
+    """
+    lp_holders = result.get("lp_holders")
+
+    if lp_holders is None:
+        if DEBUG_MODE:
+            lp_related_keys = {k: v for k, v in result.items() if "lp" in k.lower() or "liquidity" in k.lower()}
+            if lp_related_keys:
+                print(f"⚠️ lp_holders key not found, but related keys exist: {lp_related_keys}")
+            else:
+                print("⚠️ No LP-related fields found in GoPlus response for this token")
+        return {"lp_burned": None, "lp_burned_pct": None}
+
+    burn_addresses = {
+        "11111111111111111111111111111111",  # System program / common burn sink
+        "1nc1nerator11111111111111111111111111111",
+    }
+
+    total_lp = 0.0
+    burned_lp = 0.0
+
+    for holder in lp_holders:
+        try:
+            pct = float(holder.get("percent", 0) or 0)
+        except (TypeError, ValueError):
+            pct = 0.0
+        total_lp += pct
+        addr = holder.get("address", "")
+        tag = (holder.get("tag") or "").lower()
+        if addr in burn_addresses or "burn" in tag or "incinerator" in tag:
+            burned_lp += pct
+
+    if total_lp == 0:
+        return {"lp_burned": None, "lp_burned_pct": None}
+
+    burned_pct = (burned_lp / total_lp) * 100
+    return {
+        "lp_burned": burned_pct >= 90,  # treat 90%+ burned as effectively fully burned
+        "lp_burned_pct": round(burned_pct, 1),
+    }
 
 
 def is_safe_token(mint_address):

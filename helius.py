@@ -7,50 +7,62 @@ import requests
 from config import HELIUS_API, HELIUS_API_KEY, DEBUG_MODE
 from rate_limiter import wait_for
 
+HELIUS_RPC_URL = f"https://mainnet.helius-rpc.com/?api-key={HELIUS_API_KEY}"
+
 
 def get_token_metadata(mint_address):
-    """Gets token metadata including authorities."""
-    if HELIUS_API_KEY == "YOUR_HELIUS_KEY":
+    """
+    Gets token authorities (freeze/mint) via direct RPC getAccountInfo.
+
+    NOTE: This used to call Helius's /v0/token-metadata REST endpoint
+    (queryMetadataV1), which Helius has deprecated and now returns
+    410 Gone on every call. Switched to plain getAccountInfo RPC,
+    which is stable and doesn't depend on that retired wrapper.
+    """
+    if not HELIUS_API_KEY or HELIUS_API_KEY == "YOUR_HELIUS_KEY":
         if DEBUG_MODE:
             print("⚠️ Helius API key not configured")
         return None
-    
+
     wait_for("helius")
-    url = f"{HELIUS_API}/token-metadata?api-key={HELIUS_API_KEY}"
-    
+
     try:
         response = requests.post(
-            url,
-            json={"mintAccounts": [mint_address]},
+            HELIUS_RPC_URL,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getAccountInfo",
+                "params": [
+                    mint_address,
+                    {"encoding": "jsonParsed"}
+                ]
+            },
             timeout=10
         )
         response.raise_for_status()
         data = response.json()
-        
-        if not data or len(data) == 0:
+
+        result = data.get("result")
+        if not result or not result.get("value"):
             return None
-        
-        token = data[0]
-        if not token:
+
+        value = result["value"]
+        parsed = value.get("data", {}).get("parsed", {})
+        info = parsed.get("info", {})
+
+        if not info:
             return None
-        
-        on_chain = token.get("onChainMetadata") or {}
-        account_info = token.get("onChainAccountInfo") or {}
-        
-        metadata = on_chain.get("metadata") or {}
-        meta_data = metadata.get("data") or {}
-        
-        parsed = account_info.get("accountInfo", {}).get("data", {}).get("parsed", {}).get("info", {})
-        
+
         return {
             "address": mint_address,
-            "name": meta_data.get("name", ""),
-            "symbol": meta_data.get("symbol", ""),
-            "decimals": parsed.get("decimals", 9),
-            "freeze_authority": parsed.get("freezeAuthority"),
-            "mint_authority": parsed.get("mintAuthority"),
+            "name": "",   # not available via this RPC call; not used downstream for authority checks
+            "symbol": "",
+            "decimals": info.get("decimals", 9),
+            "freeze_authority": info.get("freezeAuthority"),
+            "mint_authority": info.get("mintAuthority"),
         }
-        
+
     except Exception as e:
         if DEBUG_MODE:
             print(f"❌ Helius metadata error: {e}")
