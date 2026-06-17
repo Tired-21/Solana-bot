@@ -31,7 +31,6 @@ from alert import generate_alert_data
 
 # Telegram
 from telegram_bot import send_alert, send_startup_message, send_message, send_x_alert, send_daily_digest, send_score_comparison, start_command_listener, bot_state
-from realtime_listener import start_realtime_listener, drain_new_mints
 
 # Helpers
 from helpers import format_number, truncate_address
@@ -118,21 +117,9 @@ def check_x_alert(token_address, symbol, name, mc_now):
 
 
 def discover_new_tokens():
-    """Finds new tokens to track — merges real-time WebSocket detections with polling fallback."""
+    """Finds new tokens to track."""
     new_tokens = []
     seen_addresses = set()
-
-    # Real-time detections first — these are the freshest, often
-    # discovered within seconds of the actual mint instruction.
-    realtime_hits = drain_new_mints(max_items=20)
-    for hit in realtime_hits:
-        addr = hit["address"]
-        if addr in seen_addresses:
-            continue
-        existing = db.get_token(addr)
-        if not existing:
-            new_tokens.append({"address": addr, "source": "realtime"})
-            seen_addresses.add(addr)
 
     # Try Pump.fun next (existing polling fallback)
     pumpfun_tokens = get_new_tokens(limit=20)
@@ -394,9 +381,6 @@ def main():
         send_startup_message()
         start_command_listener()
         log("🎧 Command listener active (/stop /start /status)")
-
-    log("Starting real-time WebSocket listener...")
-    start_realtime_listener()
 
     last_scan = 0
     last_context_update = 0
