@@ -18,6 +18,7 @@ bot_state = {
     "tokens_tracked": 0,
     "alerts_sent": 0,
     "digest_requested": False,
+    "learn_requested": False,
 }
 
 _last_update_id = 0
@@ -85,6 +86,9 @@ def handle_command(command):
     elif command == "/digest":
         bot_state["digest_requested"] = True
         send_message("📊 Generating digest...")
+    elif command == "/learn":
+        bot_state["learn_requested"] = True
+        send_message("📈 Comparing scores vs outcomes...")
     elif command == "/help":
         send_message(
             "<b>Commands</b>\n"
@@ -92,6 +96,7 @@ def handle_command(command):
             "/stop - pause scanning\n"
             "/status - show bot status\n"
             "/digest - show 24h leaderboard now\n"
+            "/learn - compare scores vs outcomes\n"
             "/help - show this message"
         )
 
@@ -219,7 +224,41 @@ def send_startup_message():
     return send_message(msg)
 
 
-def send_daily_digest(entries):
+def send_score_comparison(entries):
+    """
+    entries: list from db.get_alert_scores_with_outcomes(), sorted by
+    multiplier descending. Shows each token's component scores next to
+    its actual outcome, so winners and losers can be compared directly.
+    """
+    if not entries:
+        return send_message("📈 <b>Score vs Outcome (24h)</b>\nNo data yet.")
+
+    sorted_entries = sorted(entries, key=lambda x: x["multiplier"], reverse=True)
+
+    lines = ["📈 <b>Score vs Outcome (24h)</b>"]
+
+    for e in sorted_entries:
+        symbol = e.get("symbol") or "???"
+        mult = e.get("multiplier", 0)
+        d = e.get("discovery_score")
+        s = e.get("structural_score")
+        t = e.get("timing_score")
+        c = e.get("context_score")
+        sw = e.get("smart_wallet_score")
+        f = e.get("final_score")
+
+        def fmt(v):
+            return f"{v:.0f}" if v is not None else "—"
+
+        block = (
+            f"<b>{symbol}</b> — {mult:.1f}x\n"
+            f"  Discovery:{fmt(d)} Structural:{fmt(s)} Timing:{fmt(t)}\n"
+            f"  Context:{fmt(c)} SmartWallet:{fmt(sw)} Final:{fmt(f)}"
+        )
+        lines.append(block)
+
+    msg = "\n\n".join(lines)
+    return send_message(msg, silent=False)
     """
     entries: list of dicts, each with keys:
         symbol, name, market_cap_at_alert, peak_market_cap

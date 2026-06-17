@@ -30,7 +30,8 @@ from smart_wallet import calculate_smart_wallet_score
 from alert import generate_alert_data
 
 # Telegram
-from telegram_bot import send_alert, send_startup_message, send_message, send_x_alert, send_daily_digest, start_command_listener, bot_state
+from telegram_bot import send_alert, send_startup_message, send_message, send_x_alert, send_daily_digest, send_score_comparison, start_command_listener, bot_state
+from realtime_listener import start_realtime_listener, drain_new_mints
 
 # Helpers
 from helpers import format_number, truncate_address
@@ -117,23 +118,42 @@ def check_x_alert(token_address, symbol, name, mc_now):
 
 
 def discover_new_tokens():
-    """Finds new tokens to track."""
+    """Finds new tokens to track — merges real-time WebSocket detections with polling fallback."""
     new_tokens = []
+    seen_addresses = set()
 
-    # Try Pump.fun first
+    # Real-time detections first — these are the freshest, often
+    # discovered within seconds of the actual mint instruction.
+    realtime_hits = drain_new_mints(max_items=20)
+    for hit in realtime_hits:
+        addr = hit["address"]
+        if addr in seen_addresses:
+            continue
+        existing = db.get_token(addr)
+        if not existing:
+            new_tokens.append({"address": addr, "source": "realtime"})
+            seen_addresses.add(addr)
+
+    # Try Pump.fun next (existing polling fallback)
     pumpfun_tokens = get_new_tokens(limit=20)
 
     for token in pumpfun_tokens:
+        if token["address"] in seen_addresses:
+            continue
         if passes_discovery_filter(token, source="pumpfun"):
             new_tokens.append(token)
+            seen_addresses.add(token["address"])
 
     # Also check DexScreener
     dex_results = search_tokens("pump.fun")
     for token in dex_results[:10]:
-        if token and passes_discovery_filter(token, source="dexscreener"):
+        if not token or token["address"] in seen_addresses:
+            continue
+        if passes_discovery_filter(token, source="dexscreener"):
             existing = db.get_token(token["address"])
             if not existing:
                 new_tokens.append(token)
+                seen_addresses.add(token["address"])
 
     return new_tokens
 
@@ -375,6 +395,9 @@ def main():
         start_command_listener()
         log("🎧 Command listener active (/stop /start /status)")
 
+    log("Starting real-time WebSocket listener...")
+    start_realtime_listener()
+
     last_scan = 0
     last_context_update = 0
     last_cleanup = 0
@@ -435,6 +458,16 @@ def main():
                     run_daily_digest()
                 except Exception as e:
                     log(f"❌ Manual digest error: {e}")
+                    if DEBUG_MODE:
+                        traceback.print_exc()
+
+            if bot_state.get("learn_requested"):
+                bot_state["learn_requested"] = False
+                try:
+                    entries = db.get_alert_scores_with_outcomes(hours=24)
+                    send_score_comparison(entries)
+                except Exception as e:
+                    log(f"❌ Learn comparison error: {e}")
                     if DEBUG_MODE:
                         traceback.print_exc()
 

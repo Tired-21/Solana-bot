@@ -320,6 +320,73 @@ def get_latest_score(token_address):
     return dict(row) if row else None
 
 
+def get_alert_scores_with_outcomes(hours=24):
+    """
+    For every token alerted in the given window, returns its component
+    scores AT the moment of that first alert, joined with its outcome
+    (peak MC reached since, and resulting multiplier). This is the real
+    winners-vs-losers comparison using the bot's own scoring history.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    cutoff = int(time.time()) - (hours * 3600)
+
+    c.execute('''
+        SELECT a.token_address, a.market_cap_at_alert, a.timestamp as alert_time,
+               t.symbol, t.name
+        FROM alerts a
+        JOIN tokens t ON a.token_address = t.address
+        WHERE a.timestamp >= ?
+        AND a.id = (
+            SELECT MIN(id) FROM alerts a2 WHERE a2.token_address = a.token_address
+        )
+        ORDER BY a.timestamp ASC
+    ''', (cutoff,))
+
+    alerted = [dict(row) for row in c.fetchall()]
+    results = []
+
+    for entry in alerted:
+        addr = entry["token_address"]
+        alert_ts = entry["alert_time"]
+
+        c.execute('''
+            SELECT discovery_score, structural_score, timing_score,
+                   context_score, smart_wallet_score, final_score, timing_grade
+            FROM scores
+            WHERE token_address = ? AND timestamp <= ?
+            ORDER BY timestamp DESC LIMIT 1
+        ''', (addr, alert_ts))
+        score_row = c.fetchone()
+        score_data = dict(score_row) if score_row else {}
+
+        c.execute('''
+            SELECT MAX(market_cap_usd) as peak FROM snapshots
+            WHERE token_address = ? AND timestamp >= ?
+        ''', (addr, alert_ts))
+        peak_row = c.fetchone()
+        peak_mc = peak_row["peak"] if peak_row and peak_row["peak"] else 0
+        alert_mc = entry.get("market_cap_at_alert", 0) or 0
+        peak_mc = max(peak_mc, alert_mc)
+        multiplier = (peak_mc / alert_mc) if alert_mc > 0 else 0
+
+        results.append({
+            "symbol": entry.get("symbol"),
+            "alert_mc": alert_mc,
+            "peak_mc": peak_mc,
+            "multiplier": round(multiplier, 2),
+            "discovery_score": score_data.get("discovery_score"),
+            "structural_score": score_data.get("structural_score"),
+            "timing_score": score_data.get("timing_score"),
+            "context_score": score_data.get("context_score"),
+            "smart_wallet_score": score_data.get("smart_wallet_score"),
+            "final_score": score_data.get("final_score"),
+        })
+
+    conn.close()
+    return results
+
+
 # =============================================================================
 # ALERT OPERATIONS
 # =============================================================================
