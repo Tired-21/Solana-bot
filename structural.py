@@ -47,13 +47,18 @@ def calculate_structural_score(token_address, holder_data, authority_data, secur
             "reject_reason": reject_reason
         }
     
-    # 2. Holder Concentration (deduct up to 40 points)
+    # 2. Holder Concentration (deduct up to 40 points) — graduated, not a flat cliff.
+    # A flat -30/-15 step was collapsing tokens with 21% top-holder and 49%
+    # top-holder into the same penalty, which is why structural scores were
+    # landing on the same value across very different tokens. This scales
+    # the penalty by how far past the danger line the token actually is.
     if holder_data:
         top1 = holder_data.get("top1_percentage", 0)
         top10 = holder_data.get("top10_percentage", 0)
+        hard_limit = HARD_REJECTS.get("top_holder_above", 0.5)
         
         # Check against hard reject
-        if top1 > HARD_REJECTS.get("top_holder_above", 0.5):
+        if top1 > hard_limit:
             return {
                 "score": 0,
                 "signals": [f"🚫 Top holder owns {top1*100:.1f}%"],
@@ -61,18 +66,30 @@ def calculate_structural_score(token_address, holder_data, authority_data, secur
                 "reject_reason": f"Top holder owns {top1*100:.1f}%"
             }
         
-        if top1 > STRUCTURAL_THRESHOLDS["top_holder_danger"]:
-            score -= 30
+        danger = STRUCTURAL_THRESHOLDS["top_holder_danger"]
+        warning = STRUCTURAL_THRESHOLDS["top_holder_warning"]
+        if top1 > danger:
+            severity = min((top1 - danger) / max(hard_limit - danger, 0.01), 1.0)
+            penalty = 15 + severity * 25  # scales 15 -> 40 as it approaches the hard limit
+            score -= penalty
             signals.append(f"⚠️ Top holder: {top1*100:.1f}%")
-        elif top1 > STRUCTURAL_THRESHOLDS["top_holder_warning"]:
-            score -= 15
+        elif top1 > warning:
+            severity = (top1 - warning) / max(danger - warning, 0.01)
+            penalty = 5 + severity * 10  # scales 5 -> 15
+            score -= penalty
             signals.append(f"Top holder: {top1*100:.1f}%")
         
-        if top10 > STRUCTURAL_THRESHOLDS["top10_holder_danger"]:
-            score -= 20
+        danger10 = STRUCTURAL_THRESHOLDS["top10_holder_danger"]
+        warning10 = STRUCTURAL_THRESHOLDS["top10_holder_warning"]
+        if top10 > danger10:
+            severity = min((top10 - danger10) / max(1.0 - danger10, 0.01), 1.0)
+            penalty = 10 + severity * 20  # scales 10 -> 30
+            score -= penalty
             signals.append(f"⚠️ Top 10 own: {top10*100:.1f}%")
-        elif top10 > STRUCTURAL_THRESHOLDS["top10_holder_warning"]:
-            score -= 10
+        elif top10 > warning10:
+            severity = (top10 - warning10) / max(danger10 - warning10, 0.01)
+            penalty = 3 + severity * 7  # scales 3 -> 10
+            score -= penalty
     
     # 3. Authority Checks (deduct up to 30 points)
     if authority_data:

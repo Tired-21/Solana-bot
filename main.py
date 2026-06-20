@@ -17,7 +17,7 @@ import database as db
 from dexscreener import get_token_data, search_tokens
 from pumpfun import get_new_tokens, get_graduating_tokens
 from jupiter import get_sol_price
-from helius import check_authorities
+from helius import check_authorities, get_mint_creation_time, get_recent_buyers
 from birdeye import get_holder_distribution, get_token_overview
 from goplus import get_token_security
 
@@ -163,13 +163,20 @@ def process_token(token_address):
     # 2. Get token from database
     token_data = db.get_token(token_address)
     if not token_data:
+        # Try the real on-chain mint time first — more accurate than
+        # DexScreener's pairCreatedAt, which tracks pool creation and
+        # can drift from actual mint time. Falls back to DexScreener's
+        # value if this lookup fails or returns nothing, same as before.
+        real_mint_time = get_mint_creation_time(token_address)
+        created_at_value = real_mint_time if real_mint_time else current_data.get("pair_created_at")
+
         db.add_token(
             address=token_address,
             symbol=current_data.get("symbol"),
             name=current_data.get("name"),
             liquidity_usd=current_data.get("liquidity_usd"),
             market_cap_usd=current_data.get("market_cap_usd"),
-            created_at=current_data.get("pair_created_at")
+            created_at=created_at_value
         )
         token_data = db.get_token(token_address)
 
@@ -232,7 +239,23 @@ def process_token(token_address):
 
     timing_result = calculate_timing_score(token_address, token_data, current_data)
     context_result = calculate_context_score()
-    smart_wallet_result = calculate_smart_wallet_score(token_address, recent_buyers=None)
+    recent_buyers = get_recent_buyers(token_address, limit=100)
+    smart_wallet_result = calculate_smart_wallet_score(token_address, recent_buyers=recent_buyers)
+
+    # Persist wallet behavior snapshot for trend-tracking — this is what
+    # makes "how did entropy/repeat-ratio change over time" queryable later.
+    try:
+        db.add_wallet_snapshot(
+            token_address=token_address,
+            unique_buyers=smart_wallet_result.get("unique_buyers", 0),
+            entropy_normalized=smart_wallet_result.get("entropy_normalized"),
+            repeat_wallet_ratio=smart_wallet_result.get("repeat_wallet_ratio"),
+            smart_wallet_hits=smart_wallet_result.get("smart_wallet_hits", 0),
+            whale_hits=smart_wallet_result.get("whale_hits", 0),
+        )
+    except Exception as e:
+        if DEBUG_MODE:
+            log(f"  ⚠️ wallet_snapshot save error: {e}")
 
     # 7. Check X alerts for tracked tokens
     mc_now = current_data.get("market_cap_usd", 0)

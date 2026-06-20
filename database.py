@@ -78,6 +78,22 @@ def init_database():
             FOREIGN KEY (token_address) REFERENCES tokens(address)
         )
     ''')
+
+    # Wallet behavior snapshots — the trend-tracking table. Captures
+    # unique buyer count, entropy, and repeat ratio at each scan, so
+    # behavior over time (not just one snapshot) becomes queryable.
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS wallet_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_address TEXT,
+            timestamp INTEGER,
+            unique_buyers INTEGER,
+            entropy_normalized REAL,
+            repeat_wallet_ratio REAL,
+            smart_wallet_hits INTEGER,
+            whale_hits INTEGER
+        )
+    ''')
     
     # Alerts sent
     c.execute('''
@@ -318,6 +334,44 @@ def get_latest_score(token_address):
     row = c.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def add_wallet_snapshot(token_address, unique_buyers, entropy_normalized,
+                         repeat_wallet_ratio, smart_wallet_hits, whale_hits):
+    """
+    Records a wallet behavior snapshot — the trend-tracking row. Called
+    every scan cycle a token is processed, so behavior over time becomes
+    queryable instead of only ever seeing the most recent moment.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+
+    c.execute('''
+        INSERT INTO wallet_snapshots
+        (token_address, timestamp, unique_buyers, entropy_normalized,
+         repeat_wallet_ratio, smart_wallet_hits, whale_hits)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (token_address, int(time.time()), unique_buyers, entropy_normalized,
+          repeat_wallet_ratio, smart_wallet_hits, whale_hits))
+
+    conn.commit()
+    conn.close()
+
+
+def get_wallet_snapshot_history(token_address):
+    """Returns all wallet snapshots for a token, ordered by time — the trend."""
+    conn = get_connection()
+    c = conn.cursor()
+
+    c.execute('''
+        SELECT * FROM wallet_snapshots
+        WHERE token_address = ?
+        ORDER BY timestamp ASC
+    ''', (token_address,))
+
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def get_alert_scores_with_outcomes(hours=24):
