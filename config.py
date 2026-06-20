@@ -125,8 +125,8 @@ DISCOVERY_THRESHOLDS = {
 # HARD REJECTS
 # ============================================================
 HARD_REJECTS = {
-    "mint_authority": False,
-    "freeze_authority": False,
+    "mint_authority": True,
+    "freeze_authority": True,
     "honeypot": True,
     "top_holder_above": 0.5,
 }
@@ -163,6 +163,18 @@ SMART_WALLET_SETTINGS = {
     "min_appearances": 2,
     "score_boost_per_appearance": 10,
     "max_boost": 30,
+    # The keys below are what smart_wallet.py's calculate_smart_wallet_score()
+    # and add_smart_wallet() actually reference. They were missing entirely,
+    # which meant this engine has been throwing KeyError and silently failing
+    # (caught by main.py's try/except) on every token, every cycle — this
+    # predates tonight's wallet-data changes, not caused by them.
+    "smart_wallet_hit_boost": 15,
+    "whale_buy_usd": 1000,
+    "whale_buy_boost": 10,
+    "max_smart_wallet_boost": 30,
+    "min_trades_to_qualify": 5,
+    "min_win_rate": 0.5,
+    "min_avg_profit": 0.3,
 }
 
 # ============================================================
