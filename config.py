@@ -37,7 +37,17 @@ GOPLUS_API = "https://api.gopluslabs.io/api/v1"
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
 DATABASE_FILE = os.getenv("DATABASE_FILE", "bot_data.db")
 RATE_LIMITS = {
-    "dexscreener": 30,
+    # DexScreener has different limits per endpoint type (confirmed via
+    # their docs): token-profile endpoints cap at 60/min (1/sec), while
+    # pair/DEX data endpoints allow 300/min (5/sec). Previously this was
+    # one shared "dexscreener" bucket at 30/sec (1800/min) — 30x over the
+    # strict limit — and pumpfun.py's profile+pair-loop calls had ZERO
+    # rate limiting at all, bypassing this system entirely. That combo
+    # was the actual cause of the 429 storm, not anything in the wallet
+    # data changes.
+    "dexscreener": 1,            # legacy/general bucket, kept conservative
+    "dexscreener_profiles": 1,   # 60/min real limit
+    "dexscreener_pairs": 5,      # 300/min real limit
     "helius": 10,
     "birdeye": 5,
     "goplus": 10,

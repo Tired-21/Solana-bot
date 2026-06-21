@@ -5,6 +5,7 @@ pumpfun.py - Pump.fun data via DexScreener latest endpoint
 import time
 import requests
 from config import DEBUG_MODE
+from rate_limiter import wait_for
 
 DEXSCREENER_BASE = "https://api.dexscreener.com/latest/dex"
 DEXSCREENER_LATEST = "https://api.dexscreener.com/token-profiles/latest/v1"
@@ -13,6 +14,10 @@ DEXSCREENER_LATEST = "https://api.dexscreener.com/token-profiles/latest/v1"
 def get_new_tokens(limit=50):
     """Get newest Pump.fun tokens via DexScreener latest endpoint."""
     try:
+        # This hits the strict 60/min token-profiles endpoint — was
+        # previously firing with zero rate limiting, the likely main
+        # source of the 429 storm seen in testing.
+        wait_for("dexscreener_profiles")
         response = requests.get(DEXSCREENER_LATEST, timeout=10)
         response.raise_for_status()
         data = response.json()
@@ -41,8 +46,12 @@ def get_new_tokens(limit=50):
             if not address or address.startswith("0x"):
                 continue
 
-            # Fetch pair data for this token
+            # Fetch pair data for this token — also unrated before.
+            # Pair-data endpoints allow 300/min per DexScreener's docs,
+            # much looser than the profile endpoint, so this uses its
+            # own separate, faster rate-limit bucket.
             try:
+                wait_for("dexscreener_pairs")
                 pair_url = f"{DEXSCREENER_BASE}/tokens/{address}"
                 pair_resp = requests.get(pair_url, timeout=10)
                 pair_resp.raise_for_status()
