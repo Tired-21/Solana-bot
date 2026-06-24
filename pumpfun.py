@@ -6,6 +6,7 @@ import time
 import requests
 from config import DEBUG_MODE
 from rate_limiter import wait_for
+from dexscreener import _validate_created_at
 
 DEXSCREENER_BASE = "https://api.dexscreener.com/latest/dex"
 DEXSCREENER_LATEST = "https://api.dexscreener.com/token-profiles/latest/v1"
@@ -67,7 +68,7 @@ def get_new_tokens(limit=50):
 
                 mc = float(pair.get("fdv", 0) or 0)
                 liq = float(pair.get("liquidity", {}).get("usd", 0) or 0)
-                created = pair.get("pairCreatedAt")
+                created = _validate_created_at(pair.get("pairCreatedAt"))
 
                 if not created:
                     continue

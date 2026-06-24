@@ -31,6 +31,7 @@ from alert import generate_alert_data
 
 # Telegram
 from telegram_bot import send_alert, send_startup_message, send_message, send_x_alert, send_daily_digest, send_score_comparison, start_command_listener, bot_state
+from formation_tracker import update_formation_windows
 
 # Helpers
 from helpers import format_number, truncate_address
@@ -162,6 +163,7 @@ def process_token(token_address):
 
     # 2. Get token from database
     token_data = db.get_token(token_address)
+    is_new_token = token_data is None
     if not token_data:
         # Try the real on-chain mint time first — more accurate than
         # DexScreener's pairCreatedAt, which tracks pool creation and
@@ -239,6 +241,13 @@ def process_token(token_address):
 
     timing_result = calculate_timing_score(token_address, token_data, current_data)
     context_result = calculate_context_score()
+
+    # Confirmed via log analysis (2026-06-20 run): DexScreener 429 errors
+    # began 12 seconds into the scan cycle, before any token reached this
+    # point in processing — the rate limiting is caused by per-cycle token
+    # discovery volume (up to 26 tokens/cycle hitting DexScreener), not by
+    # get_recent_buyers. Restored to running every cycle as originally
+    # intended, since the earlier scope-back wasn't addressing the real cause.
     recent_buyers = get_recent_buyers(token_address, limit=100)
     smart_wallet_result = calculate_smart_wallet_score(token_address, recent_buyers=recent_buyers)
 
@@ -257,7 +266,7 @@ def process_token(token_address):
         if DEBUG_MODE:
             log(f"  ⚠️ wallet_snapshot save error: {e}")
 
-    # 7. Check X alerts for tracked tokens
+    # 7. Check X alerts and update formation windows for tracked tokens
     mc_now = current_data.get("market_cap_usd", 0)
     if mc_now > 0:
         check_x_alert(
@@ -266,6 +275,19 @@ def process_token(token_address):
             name=token_data.get("name", ""),
             mc_now=mc_now
         )
+
+    # Update formation windows for alerted tokens
+    last_alert = db.get_last_alert(token_address)
+    if last_alert:
+        try:
+            update_formation_windows(
+                token_address=token_address,
+                alert_timestamp=last_alert.get("timestamp"),
+                current_data=current_data,
+            )
+        except Exception as e:
+            if DEBUG_MODE:
+                log(f"  ⚠️ formation window error: {e}")
 
     # 8. Generate alert data
     alert_data = generate_alert_data(
