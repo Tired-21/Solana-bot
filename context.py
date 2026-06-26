@@ -47,6 +47,24 @@ def calculate_context_score(current_data=None, snapshots=None):
     volume = current_data.get("volume_5m") or 0
 
     # =========================================================
+    # 0. BOT SYMMETRY CHECK — hard penalty
+    # =========================================================
+    # Perfect or near-perfect buy/sell symmetry at volume is wash trading.
+    # Real organic trading never lands on exactly equal counts.
+    if buys > 50 and sells > 50:
+        diff = abs(buys - sells)
+        symmetry_pct = diff / max(buys, sells)
+        if symmetry_pct < 0.03:  # within 3% of each other
+            if DEBUG_MODE:
+                print(f"  🤖 [context] Bot symmetry detected: {buys}b/{sells}s")
+            return {
+                "score": 15,
+                "signals": [f"🤖 Wash trading suspected ({buys} buys / {sells} sells)"],
+                "regime": "token",
+                "multiplier": 1.0,
+            }
+
+    # =========================================================
     # 1. AVERAGE BUY SIZE — conviction proxy (up to +25 / -15)
     # =========================================================
     # DAD: $35K / 34 buys = ~$1K avg. Glippy: $27K / 48 buys = ~$562 avg.
