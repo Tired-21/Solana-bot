@@ -240,7 +240,7 @@ def process_token(token_address):
         return None
 
     timing_result = calculate_timing_score(token_address, token_data, current_data)
-    context_result = calculate_context_score()
+    context_result = calculate_context_score(current_data, snapshots)
 
     # Confirmed via log analysis (2026-06-20 run): DexScreener 429 errors
     # began 12 seconds into the scan cycle, before any token reached this

@@ -167,6 +167,26 @@ def init_database():
         )
     ''')
     
+    # Formation windows — post-alert checkpoints at 1m/5m/10m/15m/30m/60m
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS formation_windows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_address TEXT,
+            alert_timestamp INTEGER,
+            window_minutes INTEGER,
+            fdv_usd REAL,
+            fdv_return REAL,
+            volume_usd REAL,
+            holder_count INTEGER,
+            buy_count INTEGER,
+            sell_count INTEGER,
+            is_migrated INTEGER DEFAULT 0,
+            minutes_to_migration REAL,
+            recorded_at INTEGER,
+            UNIQUE(token_address, window_minutes)
+        )
+    ''')
+
     # Create indexes for faster queries
     c.execute('CREATE INDEX IF NOT EXISTS idx_snapshots_token ON snapshots(token_address)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_snapshots_time ON snapshots(timestamp)')
@@ -709,6 +729,93 @@ def get_latest_market_context():
     row = c.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# =============================================================================
+# FORMATION WINDOW OPERATIONS
+# =============================================================================
+
+def get_formation_windows(token_address):
+    """Returns all recorded formation windows for a token, ordered by window size."""
+    conn = get_connection()
+    c = conn.cursor()
+
+    c.execute('''
+        SELECT * FROM formation_windows
+        WHERE token_address = ?
+        ORDER BY window_minutes ASC
+    ''', (token_address,))
+
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def add_formation_window(token_address, alert_timestamp, window_minutes,
+                         fdv_usd, fdv_return, volume_usd, holder_count,
+                         buy_count, sell_count, is_migrated, minutes_to_migration):
+    """
+    Records one formation window checkpoint for a token.
+    UNIQUE(token_address, window_minutes) means each window is only
+    written once — subsequent calls for the same window are silently ignored.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+
+    c.execute('''
+        INSERT OR IGNORE INTO formation_windows
+        (token_address, alert_timestamp, window_minutes, fdv_usd, fdv_return,
+         volume_usd, holder_count, buy_count, sell_count, is_migrated,
+         minutes_to_migration, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (token_address, alert_timestamp, window_minutes, fdv_usd, fdv_return,
+          volume_usd, holder_count, buy_count, sell_count, int(is_migrated),
+          minutes_to_migration, int(time.time())))
+
+    conn.commit()
+    conn.close()
+
+
+def check_early_buy_pressure_formation(token_address):
+    """
+    Checks the 10m formation window against Ola's Early Buy Pressure criteria:
+      - volume_usd >= $40,000
+      - fdv_return >= 2.5x
+      - holder_count >= 250
+
+    Returns a dict with 'formation_met' (bool) and the 10m window data.
+    Returns {'formation_met': False} if the 10m window hasn't been recorded yet.
+    """
+    conn = get_connection()
+    c = conn.cursor()
+
+    c.execute('''
+        SELECT * FROM formation_windows
+        WHERE token_address = ? AND window_minutes = 10
+        LIMIT 1
+    ''', (token_address,))
+
+    row = c.fetchone()
+    conn.close()
+
+    if not row:
+        return {"formation_met": False}
+
+    data = dict(row)
+    formation_met = (
+        (data.get("volume_usd") or 0) >= 40_000 and
+        (data.get("fdv_return") or 0) >= 2.5 and
+        (data.get("holder_count") or 0) >= 250
+    )
+
+    return {
+        "formation_met": formation_met,
+        "volume_usd": data.get("volume_usd", 0),
+        "fdv_return": data.get("fdv_return", 0),
+        "holder_count": data.get("holder_count", 0),
+        "is_migrated": bool(data.get("is_migrated")),
+        "minutes_to_migration": data.get("minutes_to_migration"),
+    }
 
 
 # =============================================================================
