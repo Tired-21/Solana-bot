@@ -167,6 +167,27 @@ def init_database():
         )
     ''')
     
+
+    # Formation windows — post-alert checkpoints at 1m/5m/10m/15m/30m/60m
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS formation_windows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_address TEXT,
+            alert_timestamp INTEGER,
+            window_minutes INTEGER,
+            fdv_usd REAL,
+            fdv_return REAL,
+            volume_usd REAL,
+            holder_count INTEGER,
+            buy_count INTEGER,
+            sell_count INTEGER,
+            is_migrated INTEGER DEFAULT 0,
+            minutes_to_migration REAL,
+            recorded_at INTEGER,
+            UNIQUE(token_address, window_minutes)
+        )
+    ''')
+
     # Create indexes for faster queries
     c.execute('CREATE INDEX IF NOT EXISTS idx_snapshots_token ON snapshots(token_address)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_snapshots_time ON snapshots(timestamp)')
