@@ -172,9 +172,9 @@ def process_token(token_address):
     _buys = current_data.get("buys_5m") or 0
     _avg_buy = (_vol / _buys) if _buys > 0 else 0
     _already_tracked = db.get_token(token_address) is not None
-    if not _already_tracked and _avg_buy < 50:
+    if not _already_tracked and _avg_buy < 35:
         if DEBUG_MODE:
-            log(f"  Skipped: avg buy ${_avg_buy:.0f} below $50 minimum")
+            log(f"  Skipped: avg buy ${_avg_buy:.0f} below $35 minimum")
         return None
 
     # 3. Get token from database
