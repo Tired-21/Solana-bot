@@ -66,6 +66,10 @@ def passes_discovery_filter(token, source="unknown"):
     if liq < DISCOVERY_SETTINGS["min_liquidity_usd"]:
         return False
 
+    # Minimum market cap
+    if mc > 0 and mc < DISCOVERY_SETTINGS.get("min_market_cap_usd", 5000):
+        return False
+
     # Maximum market cap
     if mc > DISCOVERY_SETTINGS["max_market_cap_usd"]:
         return False
@@ -161,7 +165,19 @@ def process_token(token_address):
             log(f"  ❌ No DexScreener data")
         return None
 
-    # 2. Get token from database
+    # 2. Hard filter — avg buy size must show real conviction
+    # Ola DAD: $35K/34 buys = $1,029 avg. Glippy: $27K/48 buys = $562 avg.
+    # Tiny avg buy size = bots/noise. Only filters NEW tokens not yet tracked.
+    _vol = current_data.get("volume_5m") or 0
+    _buys = current_data.get("buys_5m") or 0
+    _avg_buy = (_vol / _buys) if _buys > 0 else 0
+    _already_tracked = db.get_token(token_address) is not None
+    if not _already_tracked and _avg_buy < 150:
+        if DEBUG_MODE:
+            log(f"  Skipped: avg buy ${_avg_buy:.0f} below $150 minimum")
+        return None
+
+    # 3. Get token from database
     token_data = db.get_token(token_address)
     is_new_token = token_data is None
     if not token_data:
@@ -240,7 +256,7 @@ def process_token(token_address):
         return None
 
     timing_result = calculate_timing_score(token_address, token_data, current_data)
-    context_result = calculate_context_score(current_data, snapshots)
+    context_result = calculate_context_score()
 
     # Confirmed via log analysis (2026-06-20 run): DexScreener 429 errors
     # began 12 seconds into the scan cycle, before any token reached this

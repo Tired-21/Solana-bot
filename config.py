@@ -62,7 +62,8 @@ DISCOVERY_SETTINGS = {
     "min_holders": 5,
     "min_token_age_minutes": 1,
     "max_token_age_minutes": 30,
-    "max_market_cap_usd": 2000000,
+    "min_market_cap_usd": 5000,
+    "max_market_cap_usd": 50000,
     "max_liquidity_usd": 500000,
     "track_graduated_only": False,
     "track_bonding_curve": True,
@@ -74,7 +75,7 @@ DISCOVERY_SETTINGS = {
 ALERT_THRESHOLDS = {
     "tier1_high": 80,
     "tier2_medium": 65,
-    "tier3_low": 30,
+    "tier3_low": 55,
     "alert_cooldown_minutes": 30,
     "score_change_for_realert": 10,
 }
