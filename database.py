@@ -727,6 +727,69 @@ def get_latest_market_context():
 
 
 # =============================================================================
+# FORMATION WINDOW OPERATIONS
+# =============================================================================
+
+def get_formation_windows(token_address):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''
+        SELECT * FROM formation_windows
+        WHERE token_address = ?
+        ORDER BY window_minutes ASC
+    ''', (token_address,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def add_formation_window(token_address, alert_timestamp, window_minutes,
+                         fdv_usd, fdv_return, volume_usd, holder_count,
+                         buy_count, sell_count, is_migrated, minutes_to_migration):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''
+        INSERT OR IGNORE INTO formation_windows
+        (token_address, alert_timestamp, window_minutes, fdv_usd, fdv_return,
+         volume_usd, holder_count, buy_count, sell_count, is_migrated,
+         minutes_to_migration, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (token_address, alert_timestamp, window_minutes, fdv_usd, fdv_return,
+          volume_usd, holder_count, buy_count, sell_count, int(is_migrated),
+          minutes_to_migration, int(time.time())))
+    conn.commit()
+    conn.close()
+
+
+def check_early_buy_pressure_formation(token_address):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''
+        SELECT * FROM formation_windows
+        WHERE token_address = ? AND window_minutes = 10
+        LIMIT 1
+    ''', (token_address,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return {"formation_met": False}
+    data = dict(row)
+    formation_met = (
+        (data.get("volume_usd") or 0) >= 40_000 and
+        (data.get("fdv_return") or 0) >= 2.5 and
+        (data.get("holder_count") or 0) >= 250
+    )
+    return {
+        "formation_met": formation_met,
+        "volume_usd": data.get("volume_usd", 0),
+        "fdv_return": data.get("fdv_return", 0),
+        "holder_count": data.get("holder_count", 0),
+        "is_migrated": bool(data.get("is_migrated")),
+        "minutes_to_migration": data.get("minutes_to_migration"),
+    }
+
+
+# =============================================================================
 # CLEANUP OPERATIONS
 # =============================================================================
 
