@@ -184,6 +184,7 @@ def init_database():
             is_migrated INTEGER DEFAULT 0,
             minutes_to_migration REAL,
             recorded_at INTEGER,
+            formation_notified INTEGER DEFAULT 0,
             UNIQUE(token_address, window_minutes)
         )
     ''')
@@ -807,7 +808,20 @@ def check_early_buy_pressure_formation(token_address):
         "holder_count": data.get("holder_count", 0),
         "is_migrated": bool(data.get("is_migrated")),
         "minutes_to_migration": data.get("minutes_to_migration"),
+        "already_notified": bool(data.get("formation_notified")),
     }
+
+
+def mark_formation_notified(token_address, window_minutes=10):
+    """Marks a formation window as having sent its Telegram alert."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute(
+        'UPDATE formation_windows SET formation_notified = 1 WHERE token_address = ? AND window_minutes = ?',
+        (token_address, window_minutes)
+    )
+    conn.commit()
+    conn.close()
 
 
 # =============================================================================

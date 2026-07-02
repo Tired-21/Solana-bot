@@ -15,6 +15,7 @@ Called from main.py's scan loop for every alerted token.
 import time
 from config import DEBUG_MODE
 import database as db
+from telegram_bot import send_message
 
 FORMATION_WINDOWS = [1, 5, 10, 15, 30, 60]  # minutes post-alert
 
@@ -96,3 +97,23 @@ def update_formation_windows(token_address, alert_timestamp, current_data):
                     f"Return {result['fdv_return']:.2f}x | "
                     f"Holders {result['holder_count']}"
                 )
+
+                # Send Telegram follow-up alert — only once per token
+                if not result.get("already_notified"):
+                    token_row = db.get_token(token_address)
+                    symbol = token_row.get("symbol", "???") if token_row else "???"
+
+                    msg = (
+                        f"🔥 FORMATION CONFIRMED: ${symbol}\n\n"
+                        f"Early Buy Pressure validated at 10m:\n"
+                        f"📊 Volume: ${result['volume_usd']:,.0f}\n"
+                        f"📈 Return: {result['fdv_return']:.2f}x\n"
+                        f"👥 Holders: {result['holder_count']}\n\n"
+                        f"CA: {token_address}"
+                    )
+                    try:
+                        send_message(msg)
+                        db.mark_formation_notified(token_address, window_minutes=10)
+                    except Exception as e:
+                        if DEBUG_MODE:
+                            print(f"  ⚠️ formation alert send error: {e}")
