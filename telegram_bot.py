@@ -170,6 +170,8 @@ def format_alert(alert_data):
     birdeye_link = "https://birdeye.so/token/" + addr + "?chain=solana"
 
     parts = []
+    if alert_data.get("formation_confirmed"):
+        parts.append("🔥 <b>FORMATION CONFIRMED (10m)</b>")
     parts.append("<b>" + name + " ($" + symbol + ")</b>")
     parts.append("Age: " + age_str + " " + age_emoji)
     parts.append("Price: " + format_price(price))
@@ -177,6 +179,41 @@ def format_alert(alert_data):
     parts.append("Volume (5m): " + format_number(vol5m))
     parts.append("Liquidity: " + format_number(liq))
     parts.append("MC: " + format_number(mc))
+    parts.append("CA: <code>" + addr + "</code>")
+    parts.append('<a href="' + dex_link + '">DexScreener</a> | <a href="' + birdeye_link + '">Birdeye</a>')
+    return "\n".join(parts)
+
+
+def format_fast_alert(alert_data):
+    """
+    Early, unproven volume-spike ping — mirrors Ola's Aladdin
+    "BIG VOLUME ALERT". No formation proof behind this one yet; that
+    comes later as a separate FORMATION CONFIRMED follow-up, if/when
+    it validates.
+    """
+    addr = alert_data["token_address"]
+    symbol = alert_data.get("symbol", "???")
+    name = alert_data.get("name", "")
+    mc = alert_data.get("market_cap_usd", 0)
+    liq = alert_data.get("liquidity_usd", 0)
+    vol5m = alert_data.get("volume_5m", 0)
+    buy_volume_sol = alert_data.get("buy_volume_sol", 0)
+    buy_count = alert_data.get("buy_count", 0)
+    age_minutes = alert_data.get("age_minutes")
+
+    age_str, age_emoji = get_age_label_from_minutes(age_minutes)
+    dex_link = "https://dexscreener.com/solana/" + addr
+    birdeye_link = "https://birdeye.so/token/" + addr + "?chain=solana"
+
+    parts = []
+    parts.append("🚨 <b>BIG VOLUME ALERT</b>")
+    parts.append(f"{buy_volume_sol:.0f} SOL in {buy_count} buys ⚠️ (unconfirmed)")
+    parts.append("")
+    parts.append("<b>" + name + " ($" + symbol + ")</b>")
+    parts.append("Age: " + age_str + " " + age_emoji)
+    parts.append("MC: " + format_number(mc))
+    parts.append("Liq: " + format_number(liq))
+    parts.append("Vol (5m): " + format_number(vol5m))
     parts.append("CA: <code>" + addr + "</code>")
     parts.append('<a href="' + dex_link + '">DexScreener</a> | <a href="' + birdeye_link + '">Birdeye</a>')
     return "\n".join(parts)
@@ -203,6 +240,13 @@ def send_alert(alert_data):
         return None
     bot_state["alerts_sent"] += 1
     msg = format_alert(alert_data)
+    return send_message(msg, silent=False)
+
+
+def send_fast_alert(alert_data):
+    """Fast tier — always sends regardless of composite score/tier."""
+    bot_state["alerts_sent"] += 1
+    msg = format_fast_alert(alert_data)
     return send_message(msg, silent=False)
 
 

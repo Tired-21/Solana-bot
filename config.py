@@ -81,6 +81,16 @@ ALERT_THRESHOLDS = {
 }
 
 # ============================================================
+# FAST ALERT (early volume-spike ping, mirrors Ola's Aladdin
+# "BIG VOLUME ALERT" — fires immediately, no formation proof yet)
+# ============================================================
+FAST_ALERT_SETTINGS = {
+    "min_buy_volume_sol": 30,   # observed real hits: 44 SOL, 66 SOL
+    "min_buy_count": 25,        # observed real hits: 34 buys, 48 buys
+    "max_age_minutes": 10,      # early-catch only; formation tier covers later proof
+}
+
+# ============================================================
 # ENGINE WEIGHTS (must sum to 1.0)
 # ============================================================
 ENGINE_WEIGHTS = {

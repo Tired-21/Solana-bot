@@ -1,9 +1,18 @@
 """
 alert.py - Alert Engine
 Combines all engine scores, determines final score and alert tier.
+
+Two independent alert tiers now exist:
+1. Fast tier (this file's should_alert/check_fast_alert) — an early,
+   unproven ping on a raw buy-volume/buy-count spike, mirroring Ola's
+   Aladdin "BIG VOLUME ALERT". Fires within the first few minutes.
+2. Formation tier (formation_tracker.py) — a later, higher-confidence
+   follow-up once the 10m Early Buy Pressure formation is confirmed
+   (volume >= $40k, return >= 2.5x, holders >= 250). Independent of #1;
+   doesn't gate it and isn't gated by it.
 """
 
-from config import ENGINE_WEIGHTS, ALERT_THRESHOLDS, DEBUG_MODE
+from config import ENGINE_WEIGHTS, ALERT_THRESHOLDS, FAST_ALERT_SETTINGS, DEBUG_MODE
 from helpers import clamp
 import database as db
 
@@ -51,24 +60,56 @@ def determine_alert_tier(final_score):
         return 0
 
 
-def should_alert(token_address, final_score, tier):
+def check_fast_alert(current_data, age_minutes):
     """
-    Checks if we should send an alert (cooldown, score change).
+    Fast, unproven early ping — mirrors Ola's Aladdin "BIG VOLUME ALERT"
+    (observed real hits: 44 SOL/34 buys at 1m, 66 SOL/48 buys at 5m).
+    No formation proof required for this one.
+
+    Note: DexScreener's volume_5m is combined buy+sell volume, not a
+    pure buy-side figure — this is an approximation of Ola's real
+    buy-only SOL volume. Close enough in a token's first few minutes,
+    when sell pressure is usually minimal, but worth knowing it's an
+    approximation and not an exact match to his numbers.
+
+    Returns (passed: bool, buy_volume_sol: float, buy_count: int).
     """
-    if tier == 0:
-        return False
-    
-    # Check cooldown
+    if age_minutes is None or age_minutes > FAST_ALERT_SETTINGS["max_age_minutes"]:
+        return False, 0, 0
+
+    market_context = db.get_latest_market_context()
+    sol_price = market_context.get("sol_price") if market_context else None
+    if not sol_price:
+        return False, 0, 0
+
+    buy_volume_usd = current_data.get("volume_5m", 0) or 0
+    buy_volume_sol = buy_volume_usd / sol_price
+    buy_count = current_data.get("buys_5m", 0) or 0
+
+    passed = (
+        buy_volume_sol >= FAST_ALERT_SETTINGS["min_buy_volume_sol"]
+        and buy_count >= FAST_ALERT_SETTINGS["min_buy_count"]
+    )
+    return passed, buy_volume_sol, buy_count
+
+
+def should_alert(token_address, current_data, age_minutes):
+    """
+    Fast tier gate: fires once, early, on a raw volume/buy-count spike.
+    Independent of the composite engine score below — Ola's real alerts
+    fire on volume alone, well before there'd be enough data for a
+    reliable score. The formation tier (formation_tracker.py) is a
+    separate, later, higher-confidence follow-up.
+    """
     cooldown = ALERT_THRESHOLDS["alert_cooldown_minutes"]
     if not db.can_alert(token_address, cooldown):
         return False
-    
-    # Never re-alert if already alerted this token
-    last_alert = db.get_last_alert(token_address)
-    if last_alert:
-        return False
-    
-    return True
+
+    if db.get_last_alert(token_address):
+        return False  # fast tier only ever fires once per token
+
+    passed, _, _ = check_fast_alert(current_data, age_minutes)
+    return passed
 
 
 def generate_alert_data(token_address, token_data, current_data, 
@@ -94,8 +135,10 @@ def generate_alert_data(token_address, token_data, current_data,
     # Determine tier
     tier = determine_alert_tier(final_score)
     
-    # Check if should alert
-    should_send = should_alert(token_address, final_score, tier)
+    # Fast tier gate — independent of the score/tier above (see should_alert)
+    age_minutes = timing.get("age_minutes", 0)
+    should_send = should_alert(token_address, current_data, age_minutes)
+    _, buy_volume_sol, buy_count = check_fast_alert(current_data, age_minutes)
     
     # Compile all signals
     all_signals = []
@@ -121,6 +164,8 @@ def generate_alert_data(token_address, token_data, current_data,
         "buys_5m": current_data.get("buys_5m", 0),
         "sells_5m": current_data.get("sells_5m", 0),
         "holders": current_data.get("holders", 0),
+        "buy_volume_sol": round(buy_volume_sol, 1),
+        "buy_count": buy_count,
         
         # Engine scores
         "scores": {

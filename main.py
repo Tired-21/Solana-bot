@@ -16,6 +16,7 @@ import database as db
 # Data sources
 from dexscreener import get_token_data, search_tokens
 from pumpfun import get_new_tokens, get_graduating_tokens
+from pumpfun_ws import get_new_tokens as get_new_tokens_ws, start_listener as start_pumpfun_ws
 from jupiter import get_sol_price
 from helius import check_authorities, get_mint_creation_time, get_recent_buyers
 from birdeye import get_holder_distribution, get_token_overview
@@ -30,7 +31,7 @@ from smart_wallet import calculate_smart_wallet_score
 from alert import generate_alert_data
 
 # Telegram
-from telegram_bot import send_alert, send_startup_message, send_message, send_x_alert, send_daily_digest, send_score_comparison, start_command_listener, bot_state
+from telegram_bot import send_alert, send_fast_alert, send_startup_message, send_message, send_x_alert, send_daily_digest, send_score_comparison, start_command_listener, bot_state
 from formation_tracker import update_formation_windows
 
 # Helpers
@@ -126,7 +127,19 @@ def discover_new_tokens():
     new_tokens = []
     seen_addresses = set()
 
-    # Try Pump.fun next (existing polling fallback)
+    # Primary: PumpPortal WebSocket — real-time pump.fun launch feed.
+    # created_timestamp here is the actual moment this bot observed the
+    # on-chain mint event, not DexScreener's indexing-lagged guess.
+    ws_tokens = get_new_tokens_ws(limit=20)
+    for token in ws_tokens:
+        if token["address"] in seen_addresses:
+            continue
+        if passes_discovery_filter(token, source="pumpportal_ws"):
+            new_tokens.append(token)
+            seen_addresses.add(token["address"])
+
+    # Fallback: DexScreener polling — catches anything missed during a
+    # WS reconnect gap. Ages from this path are still DexScreener-lagged.
     pumpfun_tokens = get_new_tokens(limit=20)
 
     for token in pumpfun_tokens:
@@ -292,18 +305,19 @@ def process_token(token_address):
             mc_now=mc_now
         )
 
-    # Update formation windows for alerted tokens
-    last_alert = db.get_last_alert(token_address)
-    if last_alert:
-        try:
-            update_formation_windows(
-                token_address=token_address,
-                alert_timestamp=last_alert.get("timestamp"),
-                current_data=current_data,
-            )
-        except Exception as e:
-            if DEBUG_MODE:
-                log(f"  ⚠️ formation window error: {e}")
+    # Formation-gated mode: track every non-rejected token silently from
+    # discovery (first_seen) — there's no immediate alert anymore to key
+    # off of. formation_tracker.py fires the real (and only) alert itself
+    # once the 10m Early Buy Pressure formation is confirmed.
+    try:
+        update_formation_windows(
+            token_address=token_address,
+            start_timestamp=token_data.get("first_seen"),
+            current_data=current_data,
+        )
+    except Exception as e:
+        if DEBUG_MODE:
+            log(f"  ⚠️ formation window error: {e}")
 
     # 8. Generate alert data
     alert_data = generate_alert_data(
@@ -333,17 +347,16 @@ def process_token(token_address):
 
 
 def process_alert(alert_data):
-    """Sends alert and records it."""
+    """Sends the fast-tier alert and records it."""
     if not alert_data.get("should_alert"):
         return
 
     tier = alert_data["tier"]
     token_address = alert_data["token_address"]
 
-    tier_names = {1: "🔥 HIGH", 2: "⚠️ WATCH", 3: "📊 MONITOR"}
-    log(f"{tier_names.get(tier, '?')} ALERT: ${alert_data['symbol']} (Score: {alert_data['final_score']})")
+    log(f"🚨 FAST ALERT: ${alert_data['symbol']} ({alert_data.get('buy_volume_sol', 0):.0f} SOL / {alert_data.get('buy_count', 0)} buys)")
 
-    message_id = send_alert(alert_data)
+    message_id = send_fast_alert(alert_data)
 
     alert_id = db.add_alert(
         token_address=token_address,
@@ -433,6 +446,9 @@ def main():
 
     log("Initializing database...")
     db.init_database()
+
+    log("Starting PumpPortal WS listener...")
+    start_pumpfun_ws()
 
     log("Fetching market context...")
     update_market_context()

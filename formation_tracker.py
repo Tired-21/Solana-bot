@@ -1,41 +1,52 @@
 """
 formation_tracker.py - Formation Window Tracker
 ================================================
-Tracks alerted tokens at fixed post-alert intervals (1m, 5m, 10m, 15m,
-30m, 60m), recording FDV, volume, holder count, buy/sell counts, and
-migration status at each checkpoint.
+Tracks every non-rejected token at fixed checkpoints (1m, 5m, 10m, 15m,
+30m, 60m) after discovery, recording FDV, volume, holder count, buy/sell
+counts, and migration status at each checkpoint.
 
-This is the infrastructure for Ola's validated "Early Buy Pressure"
-formation: 10m volume >= $40k + 10m return >= 2.5x + 10m holder count
->= 250 + migration <= 20m = 6.13x lift over baseline, 222 matches.
+Formation-gated mode: no alert fires on discovery anymore (see
+alert.py's should_alert). Tokens are tracked silently from first_seen.
+At the 10m checkpoint, if Ola's validated "Early Buy Pressure" formation
+is confirmed (10m volume >= $40k, 10m return >= 2.5x, 10m holders >= 250
+— 6.13x lift over baseline, validated on 222 historical matches), this
+module fires the real Telegram alert and records it in the alerts
+table. This is now the only alert path in the bot.
 
-Called from main.py's scan loop for every alerted token.
+Called from main.py's scan loop for every tracked (non-rejected) token.
 """
 
 import time
 from config import DEBUG_MODE
 import database as db
-from telegram_bot import send_message
+from telegram_bot import send_alert
 
-FORMATION_WINDOWS = [1, 5, 10, 15, 30, 60]  # minutes post-alert
+FORMATION_WINDOWS = [1, 5, 10, 15, 30, 60]  # minutes post-discovery
 
 
-def update_formation_windows(token_address, alert_timestamp, current_data):
+def update_formation_windows(token_address, start_timestamp, current_data):
     """
-    For a given alerted token, checks which formation windows have elapsed
-    since the alert, and records any that haven't been captured yet.
+    For a given tracked token, checks which formation windows have elapsed
+    since discovery (start_timestamp), and records any that haven't been
+    captured yet.
 
-    Called every scan cycle for all alerted tokens.
+    Called every scan cycle for all tracked (non-rejected) tokens.
     current_data: the token's latest DexScreener snapshot.
     """
-    if not alert_timestamp or not current_data:
+    if not start_timestamp or not current_data:
         return
 
     now = time.time()
-    elapsed_minutes = (now - alert_timestamp) / 60
+    elapsed_minutes = (now - start_timestamp) / 60
 
-    alert_fdv = current_data.get("alert_fdv_usd") or current_data.get("market_cap_usd", 0) or 0
-    if not alert_fdv:
+    # Baseline FDV = the token's market cap at discovery (stored once on
+    # the tokens row when it was first added). Nothing alerts on
+    # discovery anymore, so there's no "alert_fdv_usd" to lean on —
+    # this is the correct replacement baseline for the return calc.
+    token_row = db.get_token(token_address)
+    baseline_fdv = (token_row.get("market_cap_usd") if token_row else None) \
+        or current_data.get("market_cap_usd", 0) or 0
+    if not baseline_fdv:
         return
 
     # Determine migration status from dex_id
@@ -43,18 +54,17 @@ def update_formation_windows(token_address, alert_timestamp, current_data):
     is_migrated = "raydium" in dex_id.lower()
     minutes_to_migration = None
 
+    existing_windows = db.get_formation_windows(token_address)
+
     if is_migrated:
-        existing = db.get_formation_windows(token_address)
-        for w in existing:
+        for w in existing_windows:
             if w.get("is_migrated") and w.get("minutes_to_migration") is not None:
                 minutes_to_migration = w["minutes_to_migration"]
                 break
         if minutes_to_migration is None:
             minutes_to_migration = round(elapsed_minutes, 2)
 
-    already_recorded = {
-        w["window_minutes"] for w in db.get_formation_windows(token_address)
-    }
+    already_recorded = {w["window_minutes"] for w in existing_windows}
 
     for window in FORMATION_WINDOWS:
         if window > elapsed_minutes:
@@ -63,11 +73,11 @@ def update_formation_windows(token_address, alert_timestamp, current_data):
             continue
 
         current_fdv = current_data.get("market_cap_usd", 0) or 0
-        fdv_return = (current_fdv / alert_fdv) if alert_fdv > 0 else 0
+        fdv_return = (current_fdv / baseline_fdv) if baseline_fdv > 0 else 0
 
         db.add_formation_window(
             token_address=token_address,
-            alert_timestamp=int(alert_timestamp),
+            alert_timestamp=int(start_timestamp),
             window_minutes=window,
             fdv_usd=current_fdv,
             fdv_return=round(fdv_return, 4),
@@ -87,33 +97,56 @@ def update_formation_windows(token_address, alert_timestamp, current_data):
                 f"Migrated: {is_migrated}"
             )
 
-        # At 10m check for Ola's Early Buy Pressure formation
+        # 10m is the alert gate — nothing has fired before this point.
         if window == 10:
             result = db.check_early_buy_pressure_formation(token_address)
-            if result.get("formation_met"):
-                print(
-                    f"  🔥 EARLY BUY PRESSURE FORMATION: {token_address[:8]}... "
-                    f"Vol ${result['volume_usd']:,.0f} | "
-                    f"Return {result['fdv_return']:.2f}x | "
-                    f"Holders {result['holder_count']}"
-                )
+            if result.get("formation_met") and not result.get("already_notified"):
+                _fire_formation_alert(token_address, token_row, current_data, elapsed_minutes)
 
-                # Send Telegram follow-up alert — only once per token
-                if not result.get("already_notified"):
-                    token_row = db.get_token(token_address)
-                    symbol = token_row.get("symbol", "???") if token_row else "???"
 
-                    msg = (
-                        f"🔥 FORMATION CONFIRMED: ${symbol}\n\n"
-                        f"Early Buy Pressure validated at 10m:\n"
-                        f"📊 Volume: ${result['volume_usd']:,.0f}\n"
-                        f"📈 Return: {result['fdv_return']:.2f}x\n"
-                        f"👥 Holders: {result['holder_count']}\n\n"
-                        f"CA: {token_address}"
-                    )
-                    try:
-                        send_message(msg)
-                        db.mark_formation_notified(token_address, window_minutes=10)
-                    except Exception as e:
-                        if DEBUG_MODE:
-                            print(f"  ⚠️ formation alert send error: {e}")
+def _fire_formation_alert(token_address, token_row, current_data, elapsed_minutes):
+    """Fires the real (and only) alert once formation is confirmed at 10m."""
+    symbol = token_row.get("symbol", "???") if token_row else "???"
+    name = token_row.get("name", "Unknown") if token_row else "Unknown"
+
+    latest_score = db.get_latest_score(token_address)
+    final_score = latest_score.get("final_score", 0) if latest_score else 0
+
+    # Same shape telegram_bot.format_alert() expects, so the message
+    # renders identically to a normal alert (DexScreener/Birdeye links,
+    # age, price, buys/sells, volume, liquidity, MC).
+    alert_data = {
+        "tier": 1,
+        "formation_confirmed": True,
+        "token_address": token_address,
+        "symbol": symbol,
+        "name": name,
+        "price_usd": current_data.get("price_usd", 0),
+        "market_cap_usd": current_data.get("market_cap_usd", 0),
+        "liquidity_usd": current_data.get("liquidity_usd", 0),
+        "volume_5m": current_data.get("volume_5m", 0),
+        "buys_5m": current_data.get("buys_5m", 0),
+        "sells_5m": current_data.get("sells_5m", 0),
+        "age_minutes": elapsed_minutes,
+    }
+
+    print(
+        f"  🔥 FORMATION CONFIRMED: {token_address[:8]}... "
+        f"${symbol} — firing alert"
+    )
+
+    try:
+        message_id = send_alert(alert_data)
+        alert_id = db.add_alert(
+            token_address=token_address,
+            tier=1,
+            final_score=final_score,
+            price_at_alert=alert_data["price_usd"],
+            market_cap_at_alert=alert_data["market_cap_usd"],
+            message_id=str(message_id) if message_id else None,
+        )
+        db.add_outcome(alert_id, token_address, alert_data["price_usd"])
+        db.mark_formation_notified(token_address, window_minutes=10)
+    except Exception as e:
+        if DEBUG_MODE:
+            print(f"  ⚠️ formation alert send error: {e}")
