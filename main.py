@@ -50,7 +50,11 @@ def log(message):
 
 def passes_discovery_filter(token, source="unknown"):
     """Checks if token passes minimum requirements."""
+    addr = (token or {}).get("address", "unknown")
+
     if not token or not token.get("address"):
+        if DEBUG_MODE:
+            print(f"    ⛔ [{source}] {addr[:8]}... rejected: missing token/address")
         return False
 
     liq = float(token.get("liquidity_usd") or token.get("liquidity") or 0)
@@ -61,24 +65,36 @@ def passes_discovery_filter(token, source="unknown"):
     if age:
         age_minutes = (time.time() - age / 1000) / 60
         if age_minutes < DISCOVERY_SETTINGS.get("min_token_age_minutes", 3):
+            if DEBUG_MODE:
+                print(f"    ⛔ [{source}] {addr[:8]}... rejected: too young ({age_minutes:.2f}m < {DISCOVERY_SETTINGS.get('min_token_age_minutes', 3)}m)")
             return False
 
     # Minimum liquidity
     if liq < DISCOVERY_SETTINGS["min_liquidity_usd"]:
+        if DEBUG_MODE:
+            print(f"    ⛔ [{source}] {addr[:8]}... rejected: liquidity ${liq:,.0f} < ${DISCOVERY_SETTINGS['min_liquidity_usd']:,.0f}")
         return False
 
     # Minimum market cap
     if mc > 0 and mc < DISCOVERY_SETTINGS.get("min_market_cap_usd", 5000):
+        if DEBUG_MODE:
+            print(f"    ⛔ [{source}] {addr[:8]}... rejected: MC ${mc:,.0f} < ${DISCOVERY_SETTINGS.get('min_market_cap_usd', 5000):,.0f}")
         return False
 
     # Maximum market cap
     if mc > DISCOVERY_SETTINGS["max_market_cap_usd"]:
+        if DEBUG_MODE:
+            print(f"    ⛔ [{source}] {addr[:8]}... rejected: MC ${mc:,.0f} > ${DISCOVERY_SETTINGS['max_market_cap_usd']:,.0f}")
         return False
 
     # Maximum liquidity
     if liq > DISCOVERY_SETTINGS["max_liquidity_usd"]:
+        if DEBUG_MODE:
+            print(f"    ⛔ [{source}] {addr[:8]}... rejected: liquidity ${liq:,.0f} > ${DISCOVERY_SETTINGS['max_liquidity_usd']:,.0f}")
         return False
 
+    if DEBUG_MODE:
+        print(f"    ✅ [{source}] {addr[:8]}... passed discovery filter (liq=${liq:,.0f}, mc=${mc:,.0f})")
     return True
 
 
@@ -134,6 +150,8 @@ def discover_new_tokens():
     for token in ws_tokens:
         if token["address"] in seen_addresses:
             continue
+        if db.get_token(token["address"]):
+            continue  # already tracked — the active-tokens loop updates it
         if passes_discovery_filter(token, source="pumpportal_ws"):
             new_tokens.append(token)
             seen_addresses.add(token["address"])
@@ -145,6 +163,8 @@ def discover_new_tokens():
     for token in pumpfun_tokens:
         if token["address"] in seen_addresses:
             continue
+        if db.get_token(token["address"]):
+            continue  # already tracked — the active-tokens loop updates it
         if passes_discovery_filter(token, source="pumpfun"):
             new_tokens.append(token)
             seen_addresses.add(token["address"])

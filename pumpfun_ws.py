@@ -21,8 +21,8 @@ Newly-seen mints are held in a small pending pool and matched against
 DexScreener (for liquidity/MC) on each get_new_tokens() call, since a
 brand new bonding-curve pair sometimes takes a few seconds to a minute
 to appear there. A token is dropped from the pool once main.py has
-actually added it to the database, or after MAX_PENDING_ATTEMPTS
-fruitless tries (~2 minutes at a 10s scan interval).
+actually added it to the database, or after STALE_AFTER_SECONDS of not
+making it in.
 """
 
 import asyncio
@@ -38,7 +38,6 @@ from dexscreener import get_token_data
 import database as db
 
 PUMPPORTAL_WS_URL = "wss://pumpportal.fun/api/data"
-MAX_PENDING_ATTEMPTS = 12  # ~2 minutes at a 10s scan interval
 
 _incoming = queue.Queue()   # raw creation events straight off the socket
 _pending = {}                # address -> tracking info, see get_new_tokens()
@@ -127,6 +126,9 @@ def start_listener():
         print("  🎧 PumpPortal WS listener started")
 
 
+STALE_AFTER_SECONDS = 180  # give up if not added to the DB within 3 minutes of WS sighting
+
+
 def get_new_tokens(limit=50):
     """
     Drains newly-created tokens from the WS feed and resolves each one
@@ -146,12 +148,11 @@ def get_new_tokens(limit=50):
                     "first_seen": item["received_at"],
                     "symbol": item.get("symbol"),
                     "name": item.get("name"),
-                    "attempts": 0,
-                    "resolved_dex": None,
                 }
 
         ready = []
         stale = []
+        now = time.time()
 
         for addr, info in list(_pending.items())[:limit]:
             # Already picked up by the main pipeline — the normal
@@ -160,20 +161,20 @@ def get_new_tokens(limit=50):
                 stale.append(addr)
                 continue
 
-            if info["resolved_dex"] is None:
-                info["attempts"] += 1
-                current = get_token_data(addr)
-                if current:
-                    info["resolved_dex"] = current
-                elif info["attempts"] >= MAX_PENDING_ATTEMPTS:
-                    if DEBUG_MODE:
-                        print(f"  ⌛ Giving up on {addr[:8]}... — never indexed by DexScreener")
-                    stale.append(addr)
-                    continue
-                else:
-                    continue  # keep waiting for DexScreener to index it
+            if now - info["first_seen"] > STALE_AFTER_SECONDS:
+                if DEBUG_MODE:
+                    print(f"    ⌛ Giving up on {addr[:8]}... — not added within {STALE_AFTER_SECONDS}s of WS sighting")
+                stale.append(addr)
+                continue
 
-            current = info["resolved_dex"]
+            # Always fetch fresh — a token rejected for low MC/liquidity
+            # last cycle may well clear the bar by this one. Caching the
+            # first DexScreener response permanently was the bug: it
+            # meant a rejected token could never re-qualify later.
+            current = get_token_data(addr)
+            if not current:
+                continue  # DexScreener hasn't indexed the pair yet, retry next cycle
+
             ready.append({
                 "address": addr,
                 "symbol": current.get("symbol") or info.get("symbol"),
