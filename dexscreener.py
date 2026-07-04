@@ -9,7 +9,7 @@ from rate_limiter import wait_for
 
 
 def get_token_data(token_address):
-    wait_for("dexscreener")
+    wait_for("dexscreener_pairs")
     url = f"{DEXSCREENER_API}/dex/tokens/{token_address}"
     
     try:
@@ -102,7 +102,7 @@ def _validate_created_at(raw_value):
 
 
 def search_tokens(query):
-    wait_for("dexscreener")
+    wait_for("dexscreener_pairs")
     url = f"{DEXSCREENER_API}/dex/search/?q={query}"
     
     try:

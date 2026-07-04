@@ -11,7 +11,7 @@ SOL_MINT = "So11111111111111111111111111111111111111112"
 
 def get_sol_price():
     """Get SOL price directly from DexScreener."""
-    wait_for("dexscreener")
+    wait_for("dexscreener_pairs")
     url = f"{DEXSCREENER_API}/dex/tokens/{SOL_MINT}"
 
     try:

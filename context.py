@@ -157,7 +157,30 @@ def calculate_context_score(current_data=None, snapshots=None):
 
 # update_market_context kept as no-op so main.py import doesn't break
 def update_market_context():
-    return None
+    """
+    Fetches current SOL price and stores it so downstream consumers
+    (fast-alert's SOL conversion, digests) have something to read.
+
+    This was previously a no-op stub (`return None`) that never wrote
+    to the market_context table — meaning db.get_latest_market_context()
+    always returned None, sol_price was always None, and alert.py's
+    check_fast_alert() silently rejected every single token on the
+    "no sol_price available" branch. That was the actual reason zero
+    fast alerts were firing, independent of everything else.
+    """
+    from jupiter import get_sol_price
+    import database as db
+
+    sol_price = get_sol_price()
+    if sol_price is None:
+        if DEBUG_MODE:
+            print("  ⚠️ update_market_context: get_sol_price() returned None, skipping write")
+        return None
+
+    db.add_market_context(sol_price=sol_price, sol_change_24h=None, market_regime=None)
+    if DEBUG_MODE:
+        print(f"  💰 Market context updated: SOL=${sol_price:.2f}")
+    return sol_price
 
 
 def get_context_multiplier():

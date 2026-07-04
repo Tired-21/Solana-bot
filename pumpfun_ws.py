@@ -46,6 +46,16 @@ _pending_lock = threading.Lock()
 _started = False
 
 
+# Established mints that have shown up leaking through the "create" event
+# stream even though they're obviously not new pump.fun launches (e.g. USDC's
+# real mint appearing as a repeated fake "create"). Hard-excluded on sight.
+KNOWN_NON_LAUNCH_MINTS = {
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1",  # USDC
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",  # USDT
+    "So11111111111111111111111111111111111111112",  # wrapped SOL
+}
+
+
 def _handle_message(raw_message):
     try:
         data = json.loads(raw_message)
@@ -57,15 +67,25 @@ def _handle_message(raw_message):
     if data.get("txType") != "create" or not data.get("mint"):
         return
 
+    mint = data["mint"]
+    if mint in KNOWN_NON_LAUNCH_MINTS:
+        return
+
+    # A genuine pump.fun create event always carries bonding-curve fields.
+    # Anything claiming to be a "create" without them isn't one — reject
+    # rather than let it burn a DexScreener lookup for nothing.
+    if "bondingCurveKey" not in data and "vSolInBondingCurve" not in data:
+        return
+
     _incoming.put({
-        "address": data["mint"],
+        "address": mint,
         "symbol": data.get("symbol"),
         "name": data.get("name"),
         "received_at": time.time(),  # the real discovery instant
     })
 
     if DEBUG_MODE:
-        print(f"  🆕 WS launch: {data.get('symbol', '?')} {data['mint'][:8]}...")
+        print(f"  🆕 WS launch: {data.get('symbol', '?')} {mint[:8]}...")
 
 
 async def _listen():

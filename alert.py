@@ -75,11 +75,15 @@ def check_fast_alert(current_data, age_minutes):
     Returns (passed: bool, buy_volume_sol: float, buy_count: int).
     """
     if age_minutes is None or age_minutes > FAST_ALERT_SETTINGS["max_age_minutes"]:
+        if DEBUG_MODE:
+            print(f"    🚨 [fast alert debug] skipped — age_minutes={age_minutes}")
         return False, 0, 0
 
     market_context = db.get_latest_market_context()
     sol_price = market_context.get("sol_price") if market_context else None
     if not sol_price:
+        if DEBUG_MODE:
+            print(f"    🚨 [fast alert debug] no sol_price available — market_context={market_context}")
         return False, 0, 0
 
     buy_volume_usd = current_data.get("volume_5m", 0) or 0
@@ -90,6 +94,10 @@ def check_fast_alert(current_data, age_minutes):
         buy_volume_sol >= FAST_ALERT_SETTINGS["min_buy_volume_sol"]
         and buy_count >= FAST_ALERT_SETTINGS["min_buy_count"]
     )
+
+    if DEBUG_MODE:
+        print(f"    🚨 [fast alert debug] buy_volume_sol={buy_volume_sol:.1f} (need {FAST_ALERT_SETTINGS['min_buy_volume_sol']}) | buy_count={buy_count} (need {FAST_ALERT_SETTINGS['min_buy_count']}) | passed={passed}")
+
     return passed, buy_volume_sol, buy_count
 
 
