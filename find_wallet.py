@@ -27,11 +27,46 @@ transactions. Uses the same rate limiter as the rest of the bot.
 import argparse
 import sys
 import time
+import datetime
 
 import requests
 
 from config import HELIUS_API, HELIUS_API_KEY, DEBUG_MODE
 from rate_limiter import wait_for
+
+_price_cache = {}
+
+
+def get_historical_sol_price(ts):
+    """
+    Approx SOL/USD price near a given unix timestamp, via CoinGecko's
+    free historical range endpoint (no API key needed). Cached per
+    calendar day — day-level precision is plenty for "how much did this
+    wallet actually put in / take out in dollars", and it keeps calls
+    well under CoinGecko's free-tier rate limit even across a wallet
+    with many buys/sells spread over several days.
+    """
+    day = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+    if day in _price_cache:
+        return _price_cache[day]
+
+    url = "https://api.coingecko.com/api/v3/coins/solana/market_chart/range"
+    params = {"vs_currency": "usd", "from": ts - 3600, "to": ts + 3600}
+    try:
+        time.sleep(1.5)  # stay well under CoinGecko's free rate limit
+        resp = requests.get(url, params=params, timeout=15)
+        data = resp.json()
+        prices = data.get("prices", [])
+        if not prices:
+            _price_cache[day] = None
+            return None
+        closest = min(prices, key=lambda p: abs(p[0] / 1000 - ts))
+        _price_cache[day] = closest[1]
+        return closest[1]
+    except Exception as e:
+        print(f"  ⚠️ historical price lookup failed for {day}: {e}")
+        _price_cache[day] = None
+        return None
 
 
 def fetch_all_swaps(mint_address, max_pages=60, page_limit=100):
@@ -175,10 +210,43 @@ def score_candidates(wallets, target_ratio, target_duration_hours, ratio_toleran
             "total_sol_out": total_sol_out,
             "num_buys": len(buys),
             "num_sells": len(sells),
+            "_buys": buys,
+            "_sells": sells,
         })
 
     candidates.sort(key=lambda c: c["ratio_diff_pct"])
     return candidates
+
+
+def compute_usd_figures(candidate):
+    """
+    Fills in real dollar in/out for one candidate using the actual SOL
+    price at each individual buy/sell timestamp — not today's price,
+    since this trade may span days where SOL moved. Only call this on
+    the small shortlist that actually gets printed, not every wallet.
+    """
+    usd_in = 0.0
+    usd_out = 0.0
+    missing_price = False
+
+    for b in candidate["_buys"]:
+        price = get_historical_sol_price(b["ts"])
+        if price is None:
+            missing_price = True
+            continue
+        usd_in += b["sol"] * price
+
+    for s in candidate["_sells"]:
+        price = get_historical_sol_price(s["ts"])
+        if price is None:
+            missing_price = True
+            continue
+        usd_out += s["sol"] * price
+
+    candidate["usd_in"] = usd_in
+    candidate["usd_out"] = usd_out
+    candidate["usd_price_incomplete"] = missing_price
+    return candidate
 
 
 def main():
@@ -209,15 +277,34 @@ def main():
     )
 
     if not candidates:
-        print("\n❌ No matching wallet found. Try increasing --max-pages (history may not go back far enough) or loosening tolerances in the script.")
-    else:
-        print(f"\n✅ {len(candidates)} candidate(s), closest match first:\n")
-        for c in candidates[:10]:
+        print("\n❌ No wallet matched within tolerance. Showing the 5 closest misses instead (ignoring tolerance) so you can see how close it got:\n")
+        loose = score_candidates(
+            wallets, target_ratio, args.duration_hours or 999999,
+            ratio_tolerance=999, duration_tolerance_hours=999999,
+        )
+        for c in loose[:5]:
+            compute_usd_figures(c)
             print(f"  Wallet: {c['wallet']}")
             print(f"    Ratio: {c['ratio']:.2f}x (target {target_ratio:.2f}x, off by {c['ratio_diff_pct']:.1f}%)")
             if c["duration_hours"] is not None:
                 print(f"    Duration: {c['duration_hours']:.2f}h")
-            print(f"    Buys: {c['num_buys']} ({c['total_sol_in']:.2f} SOL in) | Sells: {c['num_sells']} ({c['total_sol_out']:.2f} SOL out)")
+            print(f"    Buys: {c['num_buys']} ({c['total_sol_in']:.2f} SOL in, ~${c['usd_in']:,.2f}) | Sells: {c['num_sells']} ({c['total_sol_out']:.2f} SOL out, ~${c['usd_out']:,.2f})")
+            if c["usd_price_incomplete"]:
+                print("    ⚠️ some historical prices unavailable — USD figures may be incomplete")
+            print()
+        if not loose:
+            print("  (no wallets had both a buy and a sell at all — history likely doesn't reach far enough back yet, raise --max-pages)")
+    else:
+        print(f"\n✅ {len(candidates)} candidate(s), closest match first:\n")
+        for c in candidates[:10]:
+            compute_usd_figures(c)
+            print(f"  Wallet: {c['wallet']}")
+            print(f"    Ratio: {c['ratio']:.2f}x (target {target_ratio:.2f}x, off by {c['ratio_diff_pct']:.1f}%)")
+            if c["duration_hours"] is not None:
+                print(f"    Duration: {c['duration_hours']:.2f}h")
+            print(f"    Buys: {c['num_buys']} ({c['total_sol_in']:.2f} SOL in, ~${c['usd_in']:,.2f}) | Sells: {c['num_sells']} ({c['total_sol_out']:.2f} SOL out, ~${c['usd_out']:,.2f})")
+            if c["usd_price_incomplete"]:
+                print("    ⚠️ some historical prices unavailable — USD figures may be incomplete")
             print()
 
     # Railway restarts a worker whenever it exits — without this, the
