@@ -46,7 +46,7 @@ def get_historical_sol_price(ts):
     well under CoinGecko's free-tier rate limit even across a wallet
     with many buys/sells spread over several days.
     """
-    day = datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+    day = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
     if day in _price_cache:
         return _price_cache[day]
 
@@ -89,14 +89,29 @@ def fetch_all_swaps(mint_address, max_pages=60, page_limit=100):
         if before_sig:
             params["before"] = before_sig
 
-        try:
-            resp = requests.get(url, params=params, timeout=15)
-            if resp.status_code != 200:
-                print(f"⚠️ HTTP {resp.status_code} on page {page}, stopping pagination")
+        batch = None
+        backoff = 5
+        for retry in range(6):  # up to ~5+10+20+40+60+60 = ~195s of backoff before giving up on this page
+            try:
+                resp = requests.get(url, params=params, timeout=15)
+                if resp.status_code == 429:
+                    print(f"  ⏳ rate limited (429) on page {page}, backing off {backoff}s (retry {retry + 1}/6)")
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+                    continue
+                if resp.status_code != 200:
+                    print(f"⚠️ HTTP {resp.status_code} on page {page}, stopping pagination")
+                    batch = None
+                    break
+                batch = resp.json()
                 break
-            batch = resp.json()
-        except Exception as e:
-            print(f"⚠️ request error on page {page}: {e}")
+            except Exception as e:
+                print(f"⚠️ request error on page {page}: {e}")
+                batch = None
+                break
+
+        if batch is None:
+            print(f"  giving up after repeated failures on page {page} — using what's fetched so far ({len(all_txs)} txs)")
             break
 
         if not isinstance(batch, list) or not batch:
@@ -159,12 +174,20 @@ def parse_wallet_trades(txs, mint_address):
     return wallets
 
 
-def score_candidates(wallets, target_ratio, target_duration_hours, ratio_tolerance=0.35, duration_tolerance_hours=6):
+def score_candidates(wallets, target_entry_price, target_exit_price, target_duration_hours,
+                      price_tolerance=0.4, duration_tolerance_hours=6, min_sol_in=0.5):
     """
-    Scores each wallet that has both buys and sells against the known
-    trade's price ratio and hold duration. Returns sorted candidates,
-    closest match first.
+    Scores each wallet against the known trade's ABSOLUTE entry and exit
+    price (in USD), not just their ratio — a dust wallet trading at a
+    totally different price range can fake a matching ratio by chance,
+    but can't fake matching both absolute numbers at once.
+
+    Converts each wallet's SOL-denominated fills to USD using the real
+    historical SOL price at each individual buy/sell timestamp (cached
+    per calendar day), since this trade can span days where SOL itself
+    moved — a single blended rate would skew the comparison.
     """
+    target_ratio = target_exit_price / target_entry_price
     candidates = []
 
     for addr, data in wallets.items():
@@ -173,93 +196,82 @@ def score_candidates(wallets, target_ratio, target_duration_hours, ratio_toleran
             continue
 
         total_sol_in = sum(b["sol"] for b in buys)
-        total_tokens_bought = sum(b["tokens"] for b in buys)
         total_sol_out = sum(s["sol"] for s in sells)
-        total_tokens_sold = sum(s["tokens"] for s in sells)
+        if total_sol_in < min_sol_in:
+            continue  # dust — see docstring
 
-        if total_tokens_bought <= 0 or total_tokens_sold <= 0:
+        usd_in, tokens_in = 0.0, 0.0
+        for b in buys:
+            price = get_historical_sol_price(b["ts"])
+            if price is None:
+                continue
+            usd_in += b["sol"] * price
+            tokens_in += b["tokens"]
+
+        usd_out, tokens_out = 0.0, 0.0
+        for s in sells:
+            price = get_historical_sol_price(s["ts"])
+            if price is None:
+                continue
+            usd_out += s["sol"] * price
+            tokens_out += s["tokens"]
+
+        if tokens_in <= 0 or tokens_out <= 0:
             continue
 
-        avg_buy_price = total_sol_in / total_tokens_bought
-        avg_sell_price = total_sol_out / total_tokens_sold
-        if avg_buy_price <= 0:
+        avg_entry_price = usd_in / tokens_in
+        avg_exit_price = usd_out / tokens_out
+        if avg_entry_price <= 0:
             continue
 
-        ratio = avg_sell_price / avg_buy_price
+        entry_diff = abs(avg_entry_price - target_entry_price) / target_entry_price
+        exit_diff = abs(avg_exit_price - target_exit_price) / target_exit_price
+        if entry_diff > price_tolerance or exit_diff > price_tolerance:
+            continue
+
+        ratio = avg_exit_price / avg_entry_price
+        ratio_diff = abs(ratio - target_ratio) / target_ratio
 
         first_buy_ts = min(b["ts"] for b in buys)
         last_sell_ts = max(s["ts"] for s in sells)
         duration_hours = (last_sell_ts - first_buy_ts) / 3600 if last_sell_ts > first_buy_ts else None
-
-        ratio_diff = abs(ratio - target_ratio) / target_ratio
-        if ratio_diff > ratio_tolerance:
+        if duration_hours is not None and abs(duration_hours - target_duration_hours) > duration_tolerance_hours:
             continue
-
-        duration_diff = None
-        if duration_hours is not None:
-            duration_diff = abs(duration_hours - target_duration_hours)
-            if duration_diff > duration_tolerance_hours:
-                continue
 
         candidates.append({
             "wallet": addr,
+            "avg_entry_price": avg_entry_price,
+            "avg_exit_price": avg_exit_price,
+            "entry_diff_pct": entry_diff * 100,
+            "exit_diff_pct": exit_diff * 100,
             "ratio": ratio,
             "ratio_diff_pct": ratio_diff * 100,
             "duration_hours": duration_hours,
             "total_sol_in": total_sol_in,
             "total_sol_out": total_sol_out,
+            "usd_in": usd_in,
+            "usd_out": usd_out,
             "num_buys": len(buys),
             "num_sells": len(sells),
-            "_buys": buys,
-            "_sells": sells,
         })
 
-    candidates.sort(key=lambda c: c["ratio_diff_pct"])
+    candidates.sort(key=lambda c: c["entry_diff_pct"] + c["exit_diff_pct"])
     return candidates
-
-
-def compute_usd_figures(candidate):
-    """
-    Fills in real dollar in/out for one candidate using the actual SOL
-    price at each individual buy/sell timestamp — not today's price,
-    since this trade may span days where SOL moved. Only call this on
-    the small shortlist that actually gets printed, not every wallet.
-    """
-    usd_in = 0.0
-    usd_out = 0.0
-    missing_price = False
-
-    for b in candidate["_buys"]:
-        price = get_historical_sol_price(b["ts"])
-        if price is None:
-            missing_price = True
-            continue
-        usd_in += b["sol"] * price
-
-    for s in candidate["_sells"]:
-        price = get_historical_sol_price(s["ts"])
-        if price is None:
-            missing_price = True
-            continue
-        usd_out += s["sol"] * price
-
-    candidate["usd_in"] = usd_in
-    candidate["usd_out"] = usd_out
-    candidate["usd_price_incomplete"] = missing_price
-    return candidate
 
 
 def main():
     parser = argparse.ArgumentParser(description="Find a wallet from known entry/exit trade data")
     parser.add_argument("mint", help="Token mint address")
-    parser.add_argument("--entry-price", type=float, required=True, help="Known avg entry price (SOL or USD per token, unit doesn't matter as long as consistent with --exit-price)")
-    parser.add_argument("--exit-price", type=float, required=True, help="Known avg exit price")
+    parser.add_argument("--entry-price", type=float, required=True, help="Known avg entry price in USD per token (e.g. 0.000005)")
+    parser.add_argument("--exit-price", type=float, required=True, help="Known avg exit price in USD per token")
     parser.add_argument("--duration-hours", type=float, default=None, help="Known hold duration in hours (e.g. 1d5h26m = 29.43)")
     parser.add_argument("--max-pages", type=int, default=60, help="Max Helius pages to fetch (100 txs/page)")
+    parser.add_argument("--min-sol-in", type=float, default=0.5, help="Minimum total SOL spent to count as a candidate (filters out dust)")
+    parser.add_argument("--price-tolerance", type=float, default=0.4, help="Allowed fractional deviation on entry/exit price (0.4 = within 40%%)")
     args = parser.parse_args()
 
     target_ratio = args.exit_price / args.entry_price
-    print(f"Target ratio: {target_ratio:.2f}x")
+    print(f"Target entry price: ${args.entry_price:.9f} | Target exit price: ${args.exit_price:.9f} | Target ratio: {target_ratio:.2f}x")
     if args.duration_hours:
         print(f"Target duration: {args.duration_hours:.2f}h")
 
@@ -270,42 +282,40 @@ def main():
     wallets = parse_wallet_trades(txs, args.mint)
     print(f"Wallets with any buy/sell activity: {len(wallets)}")
 
+    def print_candidate(c):
+        pct_return = (c["ratio"] - 1) * 100
+        print(f"  Wallet: {c['wallet']}")
+        print(f"    Entry: ${c['avg_entry_price']:.9f} (target ${args.entry_price:.9f}, off by {c['entry_diff_pct']:.1f}%)")
+        print(f"    Exit:  ${c['avg_exit_price']:.9f} (target ${args.exit_price:.9f}, off by {c['exit_diff_pct']:.1f}%)")
+        print(f"    Ratio: {c['ratio']:.2f}x  |  Return: +{pct_return:,.2f}%  (target {target_ratio:.2f}x / +{(target_ratio - 1) * 100:,.2f}%)")
+        if c["duration_hours"] is not None:
+            print(f"    Duration: {c['duration_hours']:.2f}h")
+        print(f"    Invested: {c['total_sol_in']:.2f} SOL (~${c['usd_in']:,.2f}) across {c['num_buys']} buy(s) | Received: {c['total_sol_out']:.2f} SOL (~${c['usd_out']:,.2f}) across {c['num_sells']} sell(s)")
+        print(f"    Profit: ~${c['usd_out'] - c['usd_in']:,.2f}")
+        print()
+
     candidates = score_candidates(
-        wallets,
-        target_ratio,
-        args.duration_hours or 999999,  # effectively no duration filter if not given
+        wallets, args.entry_price, args.exit_price,
+        args.duration_hours or 999999,
+        price_tolerance=args.price_tolerance,
+        min_sol_in=args.min_sol_in,
     )
 
     if not candidates:
-        print("\n❌ No wallet matched within tolerance. Showing the 5 closest misses instead (ignoring tolerance) so you can see how close it got:\n")
+        print(f"\n❌ No wallet matched within {args.price_tolerance*100:.0f}% price tolerance. Showing the 5 closest misses instead:\n")
         loose = score_candidates(
-            wallets, target_ratio, args.duration_hours or 999999,
-            ratio_tolerance=999, duration_tolerance_hours=999999,
+            wallets, args.entry_price, args.exit_price, 999999,
+            price_tolerance=999, duration_tolerance_hours=999999,
+            min_sol_in=args.min_sol_in,
         )
         for c in loose[:5]:
-            compute_usd_figures(c)
-            print(f"  Wallet: {c['wallet']}")
-            print(f"    Ratio: {c['ratio']:.2f}x (target {target_ratio:.2f}x, off by {c['ratio_diff_pct']:.1f}%)")
-            if c["duration_hours"] is not None:
-                print(f"    Duration: {c['duration_hours']:.2f}h")
-            print(f"    Buys: {c['num_buys']} ({c['total_sol_in']:.2f} SOL in, ~${c['usd_in']:,.2f}) | Sells: {c['num_sells']} ({c['total_sol_out']:.2f} SOL out, ~${c['usd_out']:,.2f})")
-            if c["usd_price_incomplete"]:
-                print("    ⚠️ some historical prices unavailable — USD figures may be incomplete")
-            print()
+            print_candidate(c)
         if not loose:
-            print("  (no wallets had both a buy and a sell at all — history likely doesn't reach far enough back yet, raise --max-pages)")
+            print("  (no wallets had both a buy and a sell above the dust threshold — history may not reach far enough back, raise --max-pages, or lower --min-sol-in)")
     else:
         print(f"\n✅ {len(candidates)} candidate(s), closest match first:\n")
         for c in candidates[:10]:
-            compute_usd_figures(c)
-            print(f"  Wallet: {c['wallet']}")
-            print(f"    Ratio: {c['ratio']:.2f}x (target {target_ratio:.2f}x, off by {c['ratio_diff_pct']:.1f}%)")
-            if c["duration_hours"] is not None:
-                print(f"    Duration: {c['duration_hours']:.2f}h")
-            print(f"    Buys: {c['num_buys']} ({c['total_sol_in']:.2f} SOL in, ~${c['usd_in']:,.2f}) | Sells: {c['num_sells']} ({c['total_sol_out']:.2f} SOL out, ~${c['usd_out']:,.2f})")
-            if c["usd_price_incomplete"]:
-                print("    ⚠️ some historical prices unavailable — USD figures may be incomplete")
-            print()
+            print_candidate(c)
 
     # Railway restarts a worker whenever it exits — without this, the
     # script would finish, Railway would immediately re-run it, and it'd
